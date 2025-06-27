@@ -1,0 +1,445 @@
+generator client {
+  provider = "prisma-client-js" // مزود عميل Prisma
+}
+
+datasource db {
+  provider = "postgresql" // نوع قاعدة البيانات المستخدمة
+  url      = env("DATABASE_URL") // رابط الاتصال بقاعدة البيانات من متغيرات البيئة
+}
+
+// ==============================================================================
+// ENUMS - تعدادات لتحديد مجموعات من القيم الثابتة
+// ==============================================================================
+
+enum UserRole {
+  USER // مستخدم عادي
+  ADMIN // مسؤول
+}
+
+enum Gender {
+  MEN // رجال
+  WOMEN // نساء
+  UNISEX // للجنسين
+}
+
+enum CartStatus {
+  PENDING // معلقة
+  PAID // مدفوعة
+  CANCELLED // ملغاة
+}
+
+enum PaymentStatus {
+  PENDING // لم يتم الدفع بعد
+  COMPLETED // تم الدفع
+  FAILED // فشل الدفع
+  REFUNDED // تم استرداد المبلغ
+}
+
+enum ShippingStatus {
+  PENDING // لم يتم الشحن بعد
+  SHIPPED // تم شحن الطلب
+  DELIVERED // تم تسليم الطلب
+  CANCELLED // تم إلغاء الشحن
+}
+
+enum OrderStatus {
+  PENDING // الطلب قيد الانتظار
+  CONFIRMED // تم تأكيد الطلب
+  SHIPPED // تم شحن الطلب
+  DELIVERED // تم تسليم الطلب
+  CANCELLED // تم إلغاء الطلب
+}
+
+enum ShippingMethodStatus {
+  STANDARD // توصيل عادي
+  PICKUP // استلام من المتجر
+  EXPRESS // توصيل سريع
+}
+
+enum ShipmentStatus {
+  PENDING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+enum NotificationType {
+  PAYMENT
+  ORDER
+  REFUND
+  SHIPMENT
+}
+
+enum DiscountType {
+  PERCENTAGE
+  FIXED
+}
+
+enum PostStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+// ==============================================================================
+// MODELS - نماذج البيانات
+// ==============================================================================
+
+// --- User and Profile Models ---
+
+model User {
+  id            String         @id @default(uuid()) // المعرف الفريد للمستخدم
+  email         String         @unique // البريد الإلكتروني (فريد)
+  password      String
+  username      String? // اسم المستخدم (اختياري)
+  role          UserRole       @default(USER) // دور المستخدم
+  refreshToken  String?        @unique // رمز التحديث للمستخدم
+  createdAt     DateTime       @default(now()) // تاريخ إنشاء الحساب
+  updatedAt     DateTime       @updatedAt // تاريخ آخر تحديث للحساب
+  profile       Profile? // علاقة مع ملف المستخدم الشخصي
+  reviews       Review[] // قائمة المراجعات التي كتبها المستخدم
+  carts         Cart[] // قائمة عربات التسوق الخاصة بالمستخدم
+  orders        Order[] // قائمة الطلبات التي قام بها المستخدم
+  notifications Notification[]
+  wishlists     Wishlist[]
+  compares      Compare[]
+  blogPosts     BlogPost[]
+  adminLogs     AdminLog[]
+}
+
+model Profile {
+  id        String    @id @default(uuid()) // المعرف الفريد للملف الشخصي
+  firstName String? // الاسم الأول
+  lastName  String? // اسم العائلة
+  avatar    String? // رابط الصورة الرمزية (اختياري)
+  gender    Gender? // جنس المستخدم (اختياري)
+  birthDate DateTime? // تاريخ الميلاد
+  phone     String? // رقم الهاتف
+  address   String? // العنوان
+  city      String? // المدينة
+  state     String? // الولاية/المقاطعة
+  zip       String? // الرمز البريدي
+  country   String? // البلد
+  createdAt DateTime  @default(now()) // تاريخ إنشاء الملف الشخصي
+  updatedAt DateTime  @updatedAt // تاريخ آخر تحديث للملف الشخصي
+  user      User      @relation(fields: [userId], references: [id]) // علاقة مع المستخدم
+  userId    String    @unique // مفتاح خارجي لربط الملف الشخصي بالمستخدم
+}
+
+// --- Product and Catalog Models ---
+
+model Category {
+  id       Int       @id @default(autoincrement()) // المعرف الفريد للفئة
+  name     String    @unique // اسم الفئة (فريد)
+  products Product[] // قائمة المنتجات ضمن هذه الفئة
+}
+
+model FlashSale {
+  id        String   @id @default(uuid()) // المعرف الفريد للخصم
+  discount  Decimal // نسبة الخصم أو المبلغ
+  startDate DateTime // تاريخ بدء الخصم
+  endDate   DateTime // تاريخ انتهاء الخصم
+  productId String   @unique // مفتاح خارجي لربط الخصم بالمنتج
+  product   Product  @relation(fields: [productId], references: [id])
+  price     Decimal // السعر الحالي بعد الخصم
+  createdAt DateTime @default(now()) // تاريخ إنشاء الخصم
+  updatedAt DateTime @updatedAt // تاريخ آخر تحديث للخصم
+}
+
+model Product {
+  id               String           @id @default(uuid()) // المعرف الفريد للمنتج
+  name             String // اسم المنتج
+  description      String // وصف المنتج
+  aboutProduct     String[] // وصف المنتج
+  price            Decimal // السعر الحالي
+  originPrice      Decimal // السعر الأصلي
+  slug             String           @unique // رابط فريد للمنتج
+  type             String // نوع المنتج
+  gender           Gender // الفئة الجنسية للمنتج
+  brand            String // العلامة التجارية
+  thumbImage       String[] // صور مصغرة للمنتج
+  images           String[] // صور المنتج
+  isSale           Boolean          @default(false) // هل المنتج في التخفيضات؟
+  isFlashSale      Boolean          @default(false) // هل المنتج في التخفيضات الفورية؟
+  isNew            Boolean          @default(false) // هل المنتج جديد؟
+  rate             Float            @default(0) // متوسط تقييم المنتج
+  sold             Int              @default(0) // عدد القطع المباعة
+  quantityPurchase Int              @default(0) // عدد مرات الشراء
+  action           String? // إجراء خاص بالمنتج (اختياري)
+  weight           Decimal? // الوزن المحدد للمنتج
+  sizes            String[] // حجم المنتج
+  colors           String[] // لون المنتج
+  createdAt        DateTime         @default(now()) // تاريخ إضافة المنتج
+  updatedAt        DateTime         @updatedAt // تاريخ آخر تحديث للمنتج
+  category         Category         @relation(fields: [categoryId], references: [id]) // علاقة مع الفئة
+  categoryId       Int // مفتاح خارجي لربط المنتج بالفئة
+  variants         ProductVariant[] // قائمة متغيرات المنتج
+  reviews          Review[] // قائمة مراجعات المنتج
+  cartItems        CartItem[] // قائمة عناصر عربة التسوق المرتبطة بالمنتج
+  orderItems       OrderItem[] // قائمة عناصر الطلبات المرتبطة بالمنتج
+  flashSale        FlashSale? // علاقة مع الخصم الفوري
+  inventory        Inventory?
+  wishlists        Wishlist[]
+  compares         Compare[]
+}
+
+// --- Payment Model ---
+
+model Payment {
+  id            String        @id @default(uuid()) // معرّف فريد للمدفوعات
+  orderId       String // معرف الطلب المرتبط بالمدفوعات
+  amount        Decimal // المبلغ المدفوع
+  paymentMethod String // طريقة الدفع
+  paymentStatus PaymentStatus // حالة الدفع
+  transactionId String? // رقم المعاملة (اختياري)
+  createdAt     DateTime      @default(now()) // تاريخ إنشاء المدفوعات
+  updatedAt     DateTime      @updatedAt // تاريخ آخر تحديث للمدفوعات
+  order         Order         @relation(fields: [orderId], references: [id]) // علاقة مع الطلب
+}
+
+// --- Inventory Model ---
+
+model Inventory {
+  id        String   @id @default(uuid()) // معرّف فريد لإدارة المخزون
+  productId String   @unique // معرف المنتج
+  quantity  Int // الكمية المتاحة
+  createdAt DateTime @default(now()) // تاريخ إضافة المخزون
+  updatedAt DateTime @updatedAt // تاريخ آخر تحديث للمخزون
+  product   Product  @relation(fields: [productId], references: [id]) // علاقة مع المنتج
+}
+
+// --- Notification Model ---
+
+model Notification {
+  id        String           @id @default(uuid()) // معرّف فريد للإشعار
+  userId    String // معرف المستخدم
+  message   String // محتوى الإشعار
+  type      NotificationType
+  isRead    Boolean          @default(false) // حالة الإشعار
+  createdAt DateTime         @default(now()) // تاريخ إنشاء الإشعار
+  updatedAt DateTime         @updatedAt // تاريخ آخر تحديث للإشعار
+  user      User             @relation(fields: [userId], references: [id]) // علاقة مع المستخدم
+}
+
+// --- Report Model ---
+
+model Report {
+  id          String   @id @default(uuid()) // معرّف فريد للتقرير
+  reportType  String // نوع التقرير
+  data        Json // بيانات التقرير بصيغة JSON
+  createdAt   DateTime @default(now()) // تاريخ إنشاء التقرير
+  updatedAt   DateTime @updatedAt // تاريخ آخر تحديث للتقرير
+  generatedBy String // الشخص الذي أنشأ التقرير
+}
+
+// --- Refund Model ---
+
+model Refund {
+  id           String        @id @default(uuid()) // معرّف فريد لاسترداد المبلغ
+  orderId      String // معرف الطلب المرتبط باسترداد المبلغ
+  amount       Decimal // المبلغ المسترد
+  reason       String // سبب الاسترداد
+  refundStatus PaymentStatus // حالة الاسترداد
+  createdAt    DateTime      @default(now()) // تاريخ استرداد المبلغ
+  updatedAt    DateTime      @updatedAt // تاريخ آخر تحديث لاسترداد المبلغ
+  order        Order         @relation(fields: [orderId], references: [id]) // علاقة مع الطلب
+}
+
+model ProductVariant {
+  id        Int      @id @default(autoincrement()) // المعرف الفريد للمتغير
+  colorName String? // اسم اللون
+  color     String // اللون
+  colorCode String // كود اللون (HEX)
+  image     String // صورة المتغير
+  size      String // حجم المتغير
+  quantity  Int // الكمية المتاحة لهذا المتغير
+  productId String
+  product   Product  @relation(fields: [productId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([productId, colorCode, size])
+}
+
+// --- Review and Blog Models ---
+
+model Review {
+  id        Int      @id @default(autoincrement()) // المعرف الفريد للمراجعة
+  rate      Int // التقييم (من 1 إلى 5)
+  message   String // نص المراجعة
+  color     String // لون المنتج
+  size      String // حجم المنتج
+  likes     Int      @default(0) // عدد الإعجابات
+  createdAt DateTime @default(now()) // تاريخ إنشاء المراجعة
+  updatedAt DateTime @updatedAt // تاريخ آخر تحديث للمراجعة
+  user      User     @relation(fields: [userId], references: [id])
+  userId    String // مفتاح خارجي للمستخدم
+  product   Product  @relation(fields: [productId], references: [id])
+  productId String // مفتاح خارجي للمنتج
+  reply     Reply? // الرد على المراجعة
+}
+
+model Reply {
+  id        Int      @id @default(autoincrement()) // المعرف الفريد للرد
+  message   String // نص الرد
+  createdAt DateTime @default(now()) // تاريخ إنشاء الرد
+  updatedAt DateTime @updatedAt // تاريخ آخر تحديث للرد
+  review    Review   @relation(fields: [reviewId], references: [id])
+  reviewId  Int      @unique // مفتاح خارجي للمراجعة
+}
+
+// --- Coupon Model ---
+
+model Coupon {
+  id            String       @id @default(uuid()) // معرّف فريد للكوبون
+  code          String       @unique // كود الكوبون الفريد
+  discountType  DiscountType // نوع الخصم: "percentage" أو "fixed"
+  discountValue Decimal // قيمة الخصم: يمكن أن تكون نسبة مئوية أو مبلغ ثابت
+  startDate     DateTime // تاريخ بدء الصلاحية
+  endDate       DateTime // تاريخ نهاية الصلاحية
+  isActive      Boolean      @default(true) // حالة الكوبون
+  usedCount     Int          @default(0) // عدد المرات المستخدمة
+  maxUsage      Int          @default(1) // عدد المرات المستخدمة المحددة
+  minOrderValue Decimal      @default(0) // القيمة الأدنى للطلب المطلوب لتطبيق الكوبون
+  createdAt     DateTime     @default(now()) // تاريخ إنشاء الكوبون
+  updatedAt     DateTime     @updatedAt // تاريخ آخر تحديث للكوبون
+  orders        Order[]
+}
+
+// --- E-commerce Models (Cart, Order) ---
+
+model Cart {
+  id                String         @id @default(uuid()) // معرّف عربة التسوق
+  total             Decimal        @default(0) // إجمالي المبلغ في العربة
+  totalWithDiscount Decimal        @default(0) // الإجمالي بعد الخصم
+  status            CartStatus     @default(PENDING) // حالة العربة
+  paymentStatus     PaymentStatus  @default(PENDING) // حالة الدفع
+  shippingStatus    ShippingStatus @default(PENDING) // حالة الشحن
+  discountCode      String? // رمز الخصم المطبق
+  discountAmount    Decimal        @default(0) // المبلغ المخصوم
+  notes             String? // ملاحظات المستخدم
+  createdAt         DateTime       @default(now()) // تاريخ الإنشاء
+  updatedAt         DateTime       @updatedAt // تاريخ التحديث
+  user              User           @relation(fields: [userId], references: [id])
+  userId            String // معرف المستخدم
+  cartItems         CartItem[] // قائمة العناصر في العربة
+}
+
+// --- Cart Item Model ---
+
+model CartItem {
+  id        Int      @id @default(autoincrement()) // معرّف العنصر في العربة
+  quantity  Int      @default(1) // الكمية
+  price     Decimal // السعر الفردي للمنتج
+  createdAt DateTime @default(now()) // تاريخ الإنشاء
+  updatedAt DateTime @updatedAt // تاريخ التحديث
+  cart      Cart     @relation(fields: [cartId], references: [id])
+  cartId    String // مفتاح خارجي للعربة
+  product   Product  @relation(fields: [productId], references: [id])
+  productId String // مفتاح خارجي للمنتج
+}
+
+// --- Order Model ---
+
+model Order {
+  id              String               @id @default(uuid()) // معرف الطلب
+  totalAmount     Decimal              @default(0) // المبلغ الإجمالي
+  paymentStatus   PaymentStatus        @default(PENDING) // حالة الدفع
+  shippingStatus  ShippingStatus       @default(PENDING) // حالة الشحن
+  shippingAddress String // عنوان الشحن
+  shippingMethod  ShippingMethodStatus @default(STANDARD) // طريقة الشحن
+  orderStatus     OrderStatus          @default(PENDING) // حالة الطلب
+  paymentMethod   String // طريقة الدفع
+  createdAt       DateTime             @default(now()) // تاريخ الإنشاء
+  updatedAt       DateTime             @updatedAt // تاريخ التحديث
+  coupon          Coupon?              @relation(fields: [couponId], references: [id]) // العلاقة مع الكوبون
+  couponId        String? // معرّف الكوبون المرتبط
+  userId          String // معرف المستخدم
+  user            User                 @relation(fields: [userId], references: [id]) // علاقة مع المستخدم
+  orderItems      OrderItem[] // العناصر المرتبطة بالطلب
+  Shipment        Shipment[] // معلومات الشحن
+  payments        Payment[]
+  refunds         Refund[]
+}
+
+// --- Order Item Model ---
+
+model OrderItem {
+  id        String   @id @default(uuid()) // معرف العنصر في الطلب
+  quantity  Int      @default(1) // الكمية
+  price     Decimal // السعر
+  createdAt DateTime @default(now()) // تاريخ الإضافة
+  updatedAt DateTime @updatedAt // تاريخ التحديث
+  order     Order    @relation(fields: [orderId], references: [id])
+  orderId   String // مفتاح خارجي للطلب المرتبط
+  product   Product  @relation(fields: [productId], references: [id])
+  productId String // مفتاح خارجي للمنتج
+}
+
+// --- Shipment Model ---
+
+model Shipment {
+  id               String         @id @default(uuid()) // معرّف الشحنة
+  trackingNumber   String // رقم التتبع
+  status           ShipmentStatus // حالة الشحنة
+  shippingDate     DateTime // تاريخ الشحن
+  estimatedArrival DateTime // الوصول المتوقع
+  carrier          String // شركة الشحن
+  orderId          String // معرف الطلب
+  order            Order          @relation(fields: [orderId], references: [id]) // علاقة مع الطلب
+}
+
+// --- Wishlist Model ---
+
+model Wishlist {
+  id        String  @id @default(uuid())
+  user      User    @relation(fields: [userId], references: [id])
+  userId    String
+  product   Product @relation(fields: [productId], references: [id])
+  productId String
+
+  @@unique([userId, productId])
+}
+
+// --- Compare Model ---
+model Compare {
+  id        String  @id @default(uuid())
+  user      User    @relation(fields: [userId], references: [id])
+  userId    String
+  product   Product @relation(fields: [productId], references: [id])
+  productId String
+
+  @@unique([userId, productId])
+}
+
+// --- Blog Model ---
+
+model BlogPost {
+  id          String     @id @default(uuid())
+  category    String
+  tag         String
+  title       String
+  author      User       @relation(fields: [authorId], references: [id])
+  authorId    String
+  avatar      String
+  thumbImg    String
+  coverImg    String
+  subImg      String[]
+  shortDesc   String
+  description String
+  slug        String
+  status      PostStatus @default(DRAFT)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+}
+
+// --- Admin Log Model ---
+
+model AdminLog {
+  id        String   @id @default(uuid())
+  admin     User     @relation(fields: [adminId], references: [id])
+  adminId   String
+  action    String
+  target    String
+  createdAt DateTime @default(now())
+}

@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "target": "es6",
+    "module": "commonjs",   
+    "outDir": "./dist",
+    "rootDir": "./",
+    "strict": true,
+    "esModuleInterop": true,                             /* Skip type checking all .d.ts files. */
+  },
+  "include": ["src/**/*", "prisma/**/*"],
+  "exclude": ["node_modules"]
+}

@@ -94,6 +94,8 @@ model User {
   username      String? // اسم المستخدم (اختياري)
   role          UserRole       @default(USER) // دور المستخدم
   refreshToken  String?        @unique // رمز التحديث للمستخدم
+  resetToken    String?        @unique // رمز الإسترجاع للمستخدم
+  resetTokenExpiresAt DateTime? // تاريخ انتهاء صلاحية رمز الإسترجاع
   createdAt     DateTime       @default(now()) // تاريخ إنشاء الحساب
   updatedAt     DateTime       @updatedAt // تاريخ آخر تحديث للحساب
   profile       Profile? // علاقة مع ملف المستخدم الشخصي

@@ -6,8 +6,8 @@
     "start": "node dist/index.js",
     "dev": "nodemon src/server.ts",
     "build": "tsc",
-    "migrate": "dotnet prisma migrate dev",
-    "studio": "dotnet prisma studio",
+    "migrate": "npx prisma migrate dev",
+    "studio": "npx prisma studio",
     "seed": "ts-node prisma/seed.ts"
   },
   "keywords": [],
@@ -20,7 +20,9 @@
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
     "@types/jsonwebtoken": "^9.0.6",
+    "@types/multer": "^1.4.13",
     "@types/node": "^20.12.12",
+    "@types/nodemailer": "^6.4.17",
     "@types/uuid": "^10.0.0",
     "nodemon": "^3.1.10",
     "ts-node": "^10.9.2"
@@ -32,7 +34,11 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.18.3",
+    "googleapis": "^150.0.1",
+    "jose": "^6.0.11",
     "jsonwebtoken": "^9.0.2",
+    "multer": "^2.0.1",
+    "nodemailer": "^7.0.3",
     "prisma": "^5.14.0",
     "typescript": "^5.4.5",
     "uuid": "^9.0.1"

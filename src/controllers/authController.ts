@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { prisma } from "../server";
+import { prisma } from "../utils/prisma";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { v4 as uuidv4 } from "uuid";
@@ -11,7 +11,6 @@ const findUserByEmail = async (email: string) => {
     where: { email },
   });
 };
-
 
 // generate tokens
 const generateTokens = (userId: string, email: string, role: string) => {
@@ -65,7 +64,7 @@ const setAuthCookies = (
 // register user
 export const register = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { email, password, username } = req.body;
+    const { email, password, username, termsAgreed } = req.body;
 
     // 1. validate inputs
     if (!email || !password || !username) {
@@ -75,12 +74,18 @@ export const register = async (req: Request, res: Response): Promise<void> => {
       return;
     }
     if (password.length < 6) {
-      res
-        .status(400)
-        .json({
-          success: false,
-          message: "Password must be at least 6 characters",
-        });
+      res.status(400).json({
+        success: false,
+        message: "Password must be at least 6 characters",
+      });
+      return;
+    }
+
+    if (!termsAgreed) {
+      res.status(400).json({
+        success: false,
+        message: "You must agree to the terms and conditions",
+      });
       return;
     }
 
@@ -103,10 +108,11 @@ export const register = async (req: Request, res: Response): Promise<void> => {
         password: hashedPassword,
         username,
         role: "USER",
+        termsAgreed: true,
       },
     });
 
-      // 5. remove password from user object
+    // 5. remove password from user object
     const { password: _, ...userWithoutPassword } = user;
 
     res.status(201).json({
@@ -116,47 +122,43 @@ export const register = async (req: Request, res: Response): Promise<void> => {
     });
   } catch (error) {
     console.error("Error registering user:", error);
-    res.status(500).json({ success: false, message: "An unexpected error occurred" });
+    res
+      .status(500)
+      .json({ success: false, message: "An unexpected error occurred" });
   }
 };
 
 // login user
 export const login = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { email, password } = req.body;
+    const { email, password, rememberMe } = req.body;
 
     // 1. validate inputs
     if (!email || !password) {
-      res
-        .status(400)
-        .json({
-          success: false,
-          message: "Please enter your email and password",
-        });
+      res.status(400).json({
+        success: false,
+        message: "Please enter your email and password",
+      });
       return;
     }
 
     // 2. find user by email
     const user = await findUserByEmail(email);
     if (!user) {
-      res
-        .status(401)
-        .json({
-          success: false,
-          message: "Invalid email or password",
-        }); // 401 Unauthorized
+      res.status(401).json({
+        success: false,
+        message: "Invalid email or password",
+      }); // 401 Unauthorized
       return;
     }
 
     // 3. check if password is valid
     const isPasswordValid = await bcrypt.compare(password, user.password);
     if (!isPasswordValid) {
-      res
-        .status(401)
-        .json({
-          success: false,
-          message: "Invalid email or password",
-        });
+      res.status(401).json({
+        success: false,
+        message: "Invalid email or password",
+      });
       return;
     }
 
@@ -167,11 +169,39 @@ export const login = async (req: Request, res: Response): Promise<void> => {
       user.role
     );
 
-    // 5. update refresh token in database
-    await updateRefreshToken(user.id, refreshToken);
+    // 5. update refresh token and remember token if requested
+    const updateData: any = { refreshToken };
 
-    // 6. set auth cookies
-    setAuthCookies(res, accessToken, refreshToken);
+    if (rememberMe) {
+      const rememberTokenExpiresAt = new Date();
+      rememberTokenExpiresAt.setDate(rememberTokenExpiresAt.getDate() + 30); // 30 days
+
+      updateData.rememberToken = true;
+      updateData.rememberTokenExpiresAt = rememberTokenExpiresAt;
+    } else {
+      updateData.rememberToken = false;
+      updateData.rememberTokenExpiresAt = null;
+    }
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: updateData,
+    });
+
+    // 6. set auth cookies with remember me duration if requested
+    const cookieOptions = {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite:
+        process.env.NODE_ENV === "production"
+          ? ("strict" as const)
+          : ("lax" as const),
+      path: "/",
+      maxAge: rememberMe ? 30 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000, // 30 days if remember me, else 24 hours
+    };
+
+    res.cookie("accessToken", accessToken, cookieOptions);
+    res.cookie("refreshToken", refreshToken, cookieOptions);
 
     // 7. send successful response with user data (without sensitive information)
     res.status(200).json({
@@ -182,11 +212,15 @@ export const login = async (req: Request, res: Response): Promise<void> => {
         email: user.email,
         username: user.username,
         role: user.role,
+        termsAgreed: user.termsAgreed,
+        rememberToken: user.rememberToken,
       },
     });
   } catch (error) {
     console.error("Error logging in:", error);
-    res.status(500).json({ success: false, message: "An unexpected error occurred" });
+    res
+      .status(500)
+      .json({ success: false, message: "An unexpected error occurred" });
   }
 };
 
@@ -199,9 +233,10 @@ export const refreshAccessToken = async (
 
   // 1. check if refresh token is provided
   if (!refreshToken) {
-    res
-      .status(401)
-      .json({ success: false, message: "Access denied. Refresh token is not provided" });
+    res.status(401).json({
+      success: false,
+      message: "Access denied. Refresh token is not provided",
+    });
     return;
   }
 
@@ -215,7 +250,9 @@ export const refreshAccessToken = async (
       // if refresh token is provided but is invalid (maybe it was already used or stolen)
       res.clearCookie("accessToken");
       res.clearCookie("refreshToken");
-      res.status(403).json({ success: false, message: "Refresh token is invalid" }); // 403 Forbidden
+      res
+        .status(403)
+        .json({ success: false, message: "Refresh token is invalid" }); // 403 Forbidden
       return;
     }
 
@@ -238,7 +275,9 @@ export const refreshAccessToken = async (
     });
   } catch (error) {
     console.error("Error refreshing access token:", error);
-    res.status(500).json({ success: false, message: "An unexpected error occurred" });
+    res
+      .status(500)
+      .json({ success: false, message: "An unexpected error occurred" });
   }
 };
 
@@ -260,13 +299,13 @@ export const logout = async (req: Request, res: Response): Promise<void> => {
     res.clearCookie("refreshToken");
 
     res.status(200).json({ success: true, message: "Logout successful" });
-    
   } catch (error) {
     console.error("Error logging out:", error);
-    res.status(500).json({ success: false, message: "An unexpected error occurred" });
+    res
+      .status(500)
+      .json({ success: false, message: "An unexpected error occurred" });
   }
 };
-
 
 //  change password
 export const changePassword = async (req: Request, res: Response) => {
@@ -280,19 +319,27 @@ export const changePassword = async (req: Request, res: Response) => {
     }
 
     const token = authHeader.split(" ")[1];
-    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as { userId: string };
+    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as {
+      userId: string;
+    };
 
     // 2. find user by id
-    const user = await prisma.user.findUnique({ where: { id: decoded.userId } });
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.userId },
+    });
 
     if (!user) {
-      return res.status(404).json({ success: false, message: "User not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "User not found" });
     }
 
     // 3. check if old password is correct
     const isMatch = await bcrypt.compare(oldPassword, user.password);
     if (!isMatch) {
-      return res.status(400).json({ success: false, message: "Incorrect old password" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Incorrect old password" });
     }
 
     // 4. check if new password is valid
@@ -310,55 +357,101 @@ export const changePassword = async (req: Request, res: Response) => {
       data: { password: hashedPassword },
     });
 
-    return res.status(200).json({ success: true, message: "Password changed successfully" });
+    return res
+      .status(200)
+      .json({ success: true, message: "Password changed successfully" });
   } catch (err) {
     console.error("Error changing password:", err);
-    return res.status(500).json({ success: false, message: "Internal server error" });
+    return res
+      .status(500)
+      .json({ success: false, message: "Internal server error" });
   }
 };
 
-
-
 // forgot password
-
-export const forgotPassword = async (req: Request, res: Response): Promise<void> => {
+export const forgotPassword = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
   try {
     const { email } = req.body;
 
-    // 1. find user by email
-    const user = await findUserByEmail(email);
-    if (!user) {
-      res.status(404).json({ success: false, message: "User not found" });
+    // 1. Validate email
+    if (!email) {
+      res.status(400).json({ success: false, message: "Email is required" });
       return;
     }
 
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      res.status(400).json({ success: false, message: "Invalid email format" });
+      return;
+    }
 
-     const newToken = uuidv4();
-     const expiresAt = new Date(Date.now() + 1 * 60 * 60 * 1000); // 1 hour
-     // 2. update user with reset token
-     await prisma.user.update({
+    // 2. find user by email
+    const user = await findUserByEmail(email);
+    if (!user) {
+      // For security reasons, don't reveal if the email exists or not
+      res.status(200).json({
+        success: true,
+        message:
+          "If an account exists with this email, a password reset link will be sent.",
+      });
+      return;
+    }
+
+    const newToken = uuidv4();
+    const expiresAt = new Date(Date.now() + 1 * 60 * 60 * 1000); // 1 hour
+
+    // 3. update user with reset token
+    await prisma.user.update({
       where: { id: user.id },
       data: {
         resetToken: newToken,
-         resetTokenExpiresAt: expiresAt,
+        resetTokenExpiresAt: expiresAt,
       },
-     });
+    });
 
-     // 3. send reset email
-     const resetLink = `${process.env.FRONTEND_URL}/reset-password?token=${newToken}`;
-     await sendResetEmail(email, resetLink);
-     res.status(200).json({ success: true, message: "Reset email sent successfully" });
-
+    // 4. send reset email
+    const resetLink = `${process.env.FRONTEND_URL}/auth/reset-password?token=${newToken}`;
+    try {
+      await sendResetEmail(email, resetLink);
+      res.status(200).json({
+        success: true,
+        message:
+          "If an account exists with this email, a password reset link will be sent.",
+      });
+    } catch (emailError) {
+      // If email fails, clean up the reset token
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          resetToken: null,
+          resetTokenExpiresAt: null,
+        },
+      });
+      console.error("Error sending reset email:", emailError);
+      res.status(500).json({
+        success: false,
+        message:
+          "Failed to send reset email. Please try again later or contact support.",
+      });
+    }
   } catch (error) {
-    console.error("Error forgot password:", error);
+    console.error("Error in forgot password:", error);
+    res.status(500).json({
+      success: false,
+      message: "An unexpected error occurred. Please try again later.",
+    });
   }
 };
 
-
-
 // reset password
-
-export const resetPassword = async (req: Request, res: Response): Promise<void> => {
+export const resetPassword = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
   try {
     const { token, newPassword } = req.body;
 
@@ -368,7 +461,9 @@ export const resetPassword = async (req: Request, res: Response): Promise<void> 
     });
 
     if (!user) {
-      res.status(404).json({ success: false, message: "Invalid or expired token" });
+      res
+        .status(404)
+        .json({ success: false, message: "Invalid or expired token" });
       return;
     }
 
@@ -386,11 +481,10 @@ export const resetPassword = async (req: Request, res: Response): Promise<void> 
       data: { password: hashedPassword },
     });
 
-
-    res.status(200).json({ success: true, message: "Password reset successfully" });
-
+    res
+      .status(200)
+      .json({ success: true, message: "Password reset successfully" });
   } catch (error) {
     console.error("Error resetting password:", error);
   }
 };
-

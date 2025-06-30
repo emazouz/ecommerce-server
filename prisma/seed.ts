@@ -1,27 +1,26 @@
 import { PrismaClient } from "@prisma/client";
-import bcrypt from "bcryptjs"
 const prisma = new PrismaClient();
 
 async function main() {
-   const email = "admin@gmail.com";
-   const password = "123456";
-   const username: string = "Admin";
-
-   const hashPassword = await bcrypt.hash(password, 10);
-   const user = await prisma.user.create({
-    data: {
-        email,
-        password: hashPassword,
-        username,
-        role: "ADMIN",
-    }
-   })
-   console.log("User created: ", user);
+  await prisma.productType.createMany({
+    data: [
+     {name: "top"},
+     {name: "t-shirt"},
+     {name: "dress"},
+     {name: "sets"},
+     {name: "shirt"},
+     {name: "bottom"},
+     {name: "pants"},
+    ],
+  });
+  console.log("Product Types created.");
 }
 
-main().catch((e) => {
+main()
+  .catch((e) => {
     console.error(e);
     process.exit(1);
-}).finally(async () => {
+  })
+  .finally(async () => {
     await prisma.$disconnect();
-})
+  });

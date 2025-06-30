@@ -1,37 +1,61 @@
 // utils/email.ts
 import nodemailer from "nodemailer";
-import { google } from "googleapis";
 
-const CLIENT_ID = process.env.GMAIL_CLIENT_ID!;
-const CLIENT_SECRET = process.env.GMAIL_CLIENT_SECRET!;
-const REDIRECT_URI = "https://developers.google.com/oauthplayground";
-const REFRESH_TOKEN = process.env.GMAIL_REFRESH_TOKEN!;
-const SENDER_EMAIL = process.env.GMAIL_SENDER!;
-
-const oAuth2Client = new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET, REDIRECT_URI);
-oAuth2Client.setCredentials({ refresh_token: REFRESH_TOKEN });
+// Create reusable transporter
+const transporter = nodemailer.createTransport({
+  service: "gmail", // Using 'gmail' service instead of manual SMTP configuration
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_APP_PASSWORD, // This should be an App Password, not your regular Gmail password
+  },
+});
 
 export const sendResetEmail = async (to: string, link: string) => {
-  const accessToken = await oAuth2Client.getAccessToken();
+  try {
+    // Send mail
+    const info = await transporter.sendMail({
+      from: `"Password Reset" <${process.env.EMAIL_USER}>`,
+      to: to,
+      subject: "Reset your password",
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2>Password Reset Request</h2>
+          <p>You have requested to reset your password. Click the button below to reset it:</p>
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="${link}" 
+               style="background-color: #4CAF50; 
+                      color: white; 
+                      padding: 14px 20px; 
+                      text-decoration: none; 
+                      border-radius: 4px;">
+              Reset Password
+            </a>
+          </div>
+          <p>If you didn't request this, please ignore this email.</p>
+          <p>This link will expire in 1 hour.</p>
+          <hr>
+          <p style="color: #666; font-size: 12px;">If the button doesn't work, copy and paste this link in your browser:</p>
+          <p style="color: #666; font-size: 12px;">${link}</p>
+        </div>
+      `,
+    });
 
-  const transporter = nodemailer.createTransport({
-    service: "gmail",
-    auth: {
-      type: "OAuth2",
-      user: SENDER_EMAIL,
-      clientId: CLIENT_ID,
-      clientSecret: CLIENT_SECRET,
-      refreshToken: REFRESH_TOKEN,
-      accessToken: accessToken.token!,
-    },
-  });
+    return info;
+  } catch (error) {
+    console.error("Error sending email:", error);
+    throw new Error("Failed to send email");
+  }
+};
 
-  await transporter.sendMail({
-    from: `YourApp <${SENDER_EMAIL}>`,
-    to,
-    subject: "Reset your password",
-    html: `<p>You requested to reset your password. Click the link below:</p>
-           <a href="${link}">${link}</a>
-           <p>This link will expire in 1 hour.</p>`,
-  });
+// Add this function to test the email configuration
+export const testEmailConfig = async () => {
+  try {
+    // Verify connection configuration
+    await transporter.verify();
+    console.log("Email configuration is valid");
+    return true;
+  } catch (error) {
+    console.error("Email configuration error:", error);
+    return false;
+  }
 };

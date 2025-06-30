@@ -1,33 +1,52 @@
 import multer from "multer";
 import path from "path";
+import fs from "fs";
+import { Request } from "express";
 
-//configure stroage
-const stroage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, "uploads/");
+// Ensure uploads directory exists
+const uploadDir = "uploads";
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+// Configure storage
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadDir);
   },
-  filename: function (req, file, cb) {
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
     cb(
       null,
-      file.filename + "-" + Date.now() + path.extname(file.originalname)
+      file.fieldname + "-" + uniqueSuffix + path.extname(file.originalname)
     );
   },
 });
 
+// File filter
 const fileFilter = (
-  req: any,
+  req: Request,
   file: Express.Multer.File,
   cb: multer.FileFilterCallback
 ) => {
   if (file.mimetype.startsWith("image")) {
     cb(null, true);
   } else {
-    cb(new Error("Not an mage! Please upload only images."));
+    cb(new Error("Only image files are allowed!"));
   }
 };
 
-export const upload = multer({
-  storage: stroage,
-  fileFilter: fileFilter,
-  limits: { fieldSize: 1024 * 1024 * 5 },
+// Create multer instance
+const upload = multer({
+  storage,
+  fileFilter,
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB
+    files: 10, // Maximum 10 files
+  },
 });
+
+// Export middleware
+// We use .any() to accept all files regardless of the field name.
+// This is more flexible for handling main images, thumb images, and variant images.
+export const uploadMiddleware = upload.any();

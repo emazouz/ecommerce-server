@@ -1,5 +1,11 @@
-import { NextFunction, Request, Response } from "express";
-import { jwtVerify, JWTPayload } from "jose";
+import { NextFunction, Response, Request } from "express";
+import jwt, { JwtPayload } from "jsonwebtoken";
+
+interface MyTokenPayload extends JwtPayload {
+  userId: string;
+  email: string;
+  role: string;
+}
 
 export interface AuthenticatedRequest extends Request {
   user?: {
@@ -9,55 +15,42 @@ export interface AuthenticatedRequest extends Request {
   };
 }
 
-export const authenticateJwt = (
+export const authenticateJwt = async (
   req: AuthenticatedRequest,
   res: Response,
   next: NextFunction
 ) => {
   const accessToken = req.cookies.accessToken;
+  console.log("📦 Access Token:", accessToken);
+
   if (!accessToken) {
-    res
-      .status(401)
-      .json({ success: false, error: "Access token is not present" });
-    return;
+    return res.status(401).json({
+      success: false,
+      error: "Access token is missing",
+    });
   }
 
-  jwtVerify(accessToken, new TextEncoder().encode(process.env.JWT_SECRET))
-    .then((res) => {
-      const payload = res.payload as JWTPayload & {
-        userId: string;
-        email: string;
-        role: string;
-      };
+  try {
+    const secret = process.env.JWT_SECRET;
+    if (!secret) {
+      throw new Error("JWT_SECRET is not defined in environment variables");
+    }
 
-      req.user = {
-        userId: payload.userId,
-        email: payload.email,
-        role: payload.role,
-      };
-      next();
-    })
-    .catch((e) => {
-      console.error(e);
-      res
-        .status(401)
-        .json({ success: false, error: "Access token is not present" });
-    });
-};
+    const decoded = jwt.verify(accessToken, secret);
+    const userPayload = decoded as MyTokenPayload;
 
-export const isSuperAdmin = (
-  req: AuthenticatedRequest,
-  res: Response,
-  next: NextFunction
-) => {
-  if (req.user && req.user.role === "ADMIN") {
+    req.user = {
+      userId: userPayload.userId,
+      email: userPayload.email,
+      role: userPayload.role,
+    };
+
     next();
-  } else {
-    res
-      .status(403)
-      .json({
-        success: false,
-        error: "Access denied! Super admin access required",
-      });
+  } catch (error) {
+    console.error("❌ JWT verification failed:", error);
+    return res.status(401).json({
+      success: false,
+      error: "Invalid or expired access token",
+    });
   }
 };

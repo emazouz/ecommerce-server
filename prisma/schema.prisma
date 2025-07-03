@@ -81,27 +81,40 @@ enum PostStatus {
   ARCHIVED
 }
 
+enum BannerType {
+  MAIN
+  PRODUCT
+  SALE
+  CATEGORY
+  BRAND
+  COUPON
+  OTHER
+}
+
 // ==============================================================================
 // MODELS - نماذج البيانات
 // ==============================================================================
 
-// --- User and Profile Models ---
+// --- User and Address Models ---
 
 model User {
-  id                     String         @id @default(uuid()) // المعرف الفريد للمستخدم
-  email                  String         @unique // البريد الإلكتروني (فريد)
+  id                     String              @id @default(uuid()) // المعرف الفريد للمستخدم
+  email                  String              @unique // البريد الإلكتروني (فريد)
   password               String
   username               String? // اسم المستخدم (اختياري)
-  role                   UserRole       @default(USER) // دور المستخدم
-  refreshToken           String?        @unique // رمز التحديث للمستخدم
-  resetToken             String?        @unique // رمز الإسترجاع للمستخدم
+  role                   UserRole            @default(USER) // دور المستخدم
+  avatar                 String? // رابط الصورة الرمزية (اختياري)
+  gender                 String? // جنس المستخدم (اختياري)
+  birthDate              DateTime? // تاريخ الميلاد
+  refreshToken           String?             @unique // رمز التحديث للمستخدم
+  resetToken             String?             @unique // رمز الإسترجاع للمستخدم
   resetTokenExpiresAt    DateTime? // تاريخ انتهاء صلاحية رمز الإسترجاع
-  rememberToken          Boolean?       @default(false) // رمز التذكر للمستخدم
+  rememberToken          Boolean?            @default(false) // رمز التذكر للمستخدم
   rememberTokenExpiresAt DateTime? // تاريخ انتهاء صلاحية رمز التذكر
-  termsAgreed            Boolean        @default(false) // الموافقة على الشروط والأحكام
-  createdAt              DateTime       @default(now()) // تاريخ إنشاء الحساب
-  updatedAt              DateTime       @updatedAt // تاريخ آخر تحديث للحساب
-  profile                Profile? // علاقة مع ملف المستخدم الشخصي
+  termsAgreed            Boolean             @default(false) // الموافقة على الشروط والأحكام
+  createdAt              DateTime            @default(now()) // تاريخ إنشاء الحساب
+  updatedAt              DateTime            @updatedAt // تاريخ آخر تحديث للحساب
+  Address                Address? // علاقة مع ملف المستخدم الشخصي
   reviews                Review[] // قائمة المراجعات التي كتبها المستخدم
   carts                  Cart[] // قائمة عربات التسوق الخاصة بالمستخدم
   orders                 Order[] // قائمة الطلبات التي قام بها المستخدم
@@ -111,25 +124,58 @@ model User {
   blogPosts              BlogPost[]
   adminLogs              AdminLog[]
   replies                Reply[]
+  emailVerifications     EmailVerification[]
 }
 
-model Profile {
-  id        String    @id @default(uuid()) // المعرف الفريد للملف الشخصي
-  firstName String? // الاسم الأول
-  lastName  String? // اسم العائلة
-  avatar    String? // رابط الصورة الرمزية (اختياري)
-  gender    Gender? // جنس المستخدم (اختياري)
-  birthDate DateTime? // تاريخ الميلاد
-  phone     String? // رقم الهاتف
-  address   String? // العنوان
-  city      String? // المدينة
-  state     String? // الولاية/المقاطعة
-  zip       String? // الرمز البريدي
-  country   String? // البلد
-  createdAt DateTime  @default(now()) // تاريخ إنشاء الملف الشخصي
-  updatedAt DateTime  @updatedAt // تاريخ آخر تحديث للملف الشخصي
-  user      User      @relation(fields: [userId], references: [id]) // علاقة مع المستخدم
-  userId    String    @unique // مفتاح خارجي لربط الملف الشخصي بالمستخدم
+// --- Banner Model ---
+
+model Banner {
+  id         String      @id @default(cuid())
+  title      String
+  subtitle   String?
+  imageUrl   String
+  linkUrl    String? // رابط اختياري عند الضغط على البانر
+  buttonText String? // نص الزر
+  type       BannerType? // "MAIN", "PRODUCT", "SALE", etc.
+  isActive   Boolean     @default(true)
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+}
+
+// --- Email Verification Model ---
+model EmailVerification {
+  id        String   @id @default(uuid()) // المعرف الفريد للملف الشخصي
+  newEmail  String   @unique // البريد الإلكتروني الجديد (فريد)
+  code      String   @unique // رمز التحقق
+  expiresAt DateTime // تاريخ انتهاء صلاحية رمز التحقق
+  user      User     @relation(fields: [userId], references: [id]) // علاقة مع المستخدم
+  userId    String   @unique // مفتاح خارجي لربط الملف الشخصي بالمستخدم
+
+  createdAt DateTime @default(now()) // تاريخ إنشاء الملف الشخصي
+  updatedAt DateTime @updatedAt // تاريخ آخر تحديث للملف الشخصي
+}
+
+enum AddressType {
+  HOME
+  OFFICE
+  OTHER
+}
+
+model Address {
+  id             String       @id @default(uuid()) // المعرف الفريد للملف الشخصي
+  fullName       String? // الاسم الكامل
+  phone          String? // رقم الهاتف المحمول
+  addressLineOne String? // العنوان
+  addressLineTwo String? // العنوان
+  city           String? // المدينة
+  addressType    AddressType? @default(HOME) // الولاية/المقاطعة  (اختياري) افتراضيا يكون HOME
+  zipCode        String? // الرمز البريدي
+  country        String? // البلد
+  isDefault      Boolean?     @default(false) // هل هذا العنوان هو الافتراضي؟
+  createdAt      DateTime     @default(now()) // تاريخ إنشاء الملف الشخصي
+  updatedAt      DateTime     @updatedAt // تاريخ آخر تحديث للملف الشخصي
+  user           User         @relation(fields: [userId], references: [id]) // علاقة مع المستخدم
+  userId         String       @unique // مفتاح خارجي لربط الملف الشخصي بالمستخدم
 }
 
 // --- Product and Catalog Models ---
@@ -262,7 +308,7 @@ model Refund {
 }
 
 model ProductVariant {
-  id        Int      @id @default(autoincrement()) // المعرف الفريد للمتغير
+  id        Int        @id @default(autoincrement()) // المعرف الفريد للمتغير
   colorName String? // اسم اللون
   color     String // اللون
   colorCode String // كود اللون (HEX)
@@ -270,9 +316,10 @@ model ProductVariant {
   size      String // حجم المتغير
   quantity  Int // الكمية المتاحة لهذا المتغير
   productId String
-  product   Product  @relation(fields: [productId], references: [id])
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  product   Product    @relation(fields: [productId], references: [id])
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  cartItems CartItem[]
 
   @@unique([productId, colorCode, size])
 }
@@ -311,7 +358,7 @@ model Reply {
 model Coupon {
   id            String       @id @default(uuid()) // معرّف فريد للكوبون
   code          String       @unique // كود الكوبون الفريد
-  discountType  DiscountType // نوع الخصم: "percentage" أو "fixed"
+  discountType  DiscountType @default(PERCENTAGE) // نوع الخصم: "percentage" أو "fixed"
   discountValue Decimal // قيمة الخصم: يمكن أن تكون نسبة مئوية أو مبلغ ثابت
   startDate     DateTime // تاريخ بدء الصلاحية
   endDate       DateTime // تاريخ نهاية الصلاحية
@@ -346,15 +393,17 @@ model Cart {
 // --- Cart Item Model ---
 
 model CartItem {
-  id        Int      @id @default(autoincrement()) // معرّف العنصر في العربة
-  quantity  Int      @default(1) // الكمية
+  id        Int             @id @default(autoincrement()) // معرّف العنصر في العربة
+  quantity  Int             @default(1) // الكمية
   price     Decimal // السعر الفردي للمنتج
-  createdAt DateTime @default(now()) // تاريخ الإنشاء
-  updatedAt DateTime @updatedAt // تاريخ التحديث
-  cart      Cart     @relation(fields: [cartId], references: [id])
+  createdAt DateTime        @default(now()) // تاريخ الإنشاء
+  updatedAt DateTime        @updatedAt // تاريخ التحديث
+  cart      Cart            @relation(fields: [cartId], references: [id])
   cartId    String // مفتاح خارجي للعربة
-  product   Product  @relation(fields: [productId], references: [id])
+  product   Product         @relation(fields: [productId], references: [id])
   productId String // مفتاح خارجي للمنتج
+  variant   ProductVariant? @relation(fields: [variantId], references: [id])
+  variantId Int?
 }
 
 // --- Order Model ---

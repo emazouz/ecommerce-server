@@ -621,7 +621,7 @@ class ProductController {
                 select: {
                   id: true,
                   username: true,
-                  profile: true,
+                  avatar: true,
                 },
               },
               reply: true,
@@ -1013,7 +1013,7 @@ class ProductController {
               select: {
                 id: true,
                 username: true,
-                profile: true,
+                avatar: true,
               },
             },
             reply: true,
@@ -1035,6 +1035,7 @@ class ProductController {
 
       res.json({
         success: true,
+        likes: reviews.reduce((acc, review) => acc + review.likes, 0),
         data: reviews,
         avgRating,
         pagination: {
@@ -1058,7 +1059,7 @@ class ProductController {
       if (!userId) {
         throw new ApiError(401, "Authentication required");
       }
-      if (!rate || rate < 1 || rate > 5) {
+      if (!parseInt(rate) || parseInt(rate) < 1 || parseInt(rate) > 5) {
         throw new ApiError(400, "Rate must be between 1 and 5");
       }
 
@@ -1071,15 +1072,15 @@ class ProductController {
         data: {
           productId: id,
           userId,
-          rate,
+          rate: parseInt(rate),
           message,
           color,
           size,
-          likes,
+          likes: parseInt(likes),
         },
         include: {
           user: {
-            select: { id: true, username: true, profile: true },
+            select: { id: true, username: true},
           },
         },
       });
@@ -1141,11 +1142,7 @@ class ProductController {
             select: {
               id: true,
               username: true,
-              profile: {
-                select: {
-                  avatar: true,
-                },
-              },
+              avatar: true,
             },
           },
         },
@@ -1166,6 +1163,7 @@ class ProductController {
       next(error);
     }
   };
+
 
   public searchProducts: RequestHandler = async (req, res, next) => {
     try {

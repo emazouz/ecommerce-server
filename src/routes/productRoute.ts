@@ -16,7 +16,11 @@ router.use(authMiddleware);
 
 // add Product Review - Moved to protected routes
 // localhost:5000/api/v1/products/1/reviews
-router.post("/:id/reviews", productController.addProductReview);
+router.post(
+  "/:id/reviews",
+  uploadMiddleware,
+  productController.addProductReview
+);
 
 // Reply to a review by an admin
 router.post("/reviews/:reviewId/reply", productController.addReplyToReview);

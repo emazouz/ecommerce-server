@@ -21,8 +21,6 @@ export const authenticateJwt = async (
   next: NextFunction
 ) => {
   const accessToken = req.cookies.accessToken;
-  console.log("📦 Access Token:", accessToken);
-
   if (!accessToken) {
     return res.status(401).json({
       success: false,
@@ -51,6 +49,21 @@ export const authenticateJwt = async (
     return res.status(401).json({
       success: false,
       error: "Invalid or expired access token",
+    });
+  }
+};
+
+export const isAdmin = (
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+) => {
+  if (req.user && req.user.role === "ADMIN") {
+    next();
+  } else {
+    res.status(403).json({
+      success: false,
+      error: "Access denied! Admin access required",
     });
   }
 };

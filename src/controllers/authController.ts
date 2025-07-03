@@ -4,6 +4,9 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { v4 as uuidv4 } from "uuid";
 import { sendResetEmail } from "../utils/email";
+import { resetPasswordMessage } from "../email/resetPassword";
+import { AuthenticatedRequest } from "../middleware/authMiddleware";
+import { emailVerificationMessage } from "../email/emailVerification";
 
 // find user by email
 const findUserByEmail = async (email: string) => {
@@ -308,41 +311,29 @@ export const logout = async (req: Request, res: Response): Promise<void> => {
 };
 
 //  change password
-export const changePassword = async (req: Request, res: Response) => {
+export const changePassword = async (
+  req: AuthenticatedRequest,
+  res: Response
+) => {
   try {
+    const userId = req.user?.userId;
+    // The middleware should ensure the user is authenticated, but this is a safeguard.
+    if (!userId) {
+      return res
+        .status(401)
+        .json({ success: false, message: "User not authenticated" });
+    }
+
     const { oldPassword, newPassword } = req.body;
 
-    // 1. check if token is provided
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return res.status(401).json({ success: false, message: "Unauthorized" });
+    // 1. Validate inputs
+    if (!oldPassword || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: "Old password and new password are required",
+      });
     }
 
-    const token = authHeader.split(" ")[1];
-    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as {
-      userId: string;
-    };
-
-    // 2. find user by id
-    const user = await prisma.user.findUnique({
-      where: { id: decoded.userId },
-    });
-
-    if (!user) {
-      return res
-        .status(404)
-        .json({ success: false, message: "User not found" });
-    }
-
-    // 3. check if old password is correct
-    const isMatch = await bcrypt.compare(oldPassword, user.password);
-    if (!isMatch) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Incorrect old password" });
-    }
-
-    // 4. check if new password is valid
     if (newPassword.length < 6) {
       return res.status(400).json({
         success: false,
@@ -350,7 +341,27 @@ export const changePassword = async (req: Request, res: Response) => {
       });
     }
 
-    // 5. hash new password and update user password
+    // 2. Find user by id
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    // This should not happen if the token is valid, but it's a good check.
+    if (!user) {
+      return res
+        .status(404)
+        .json({ success: false, message: "User not found" });
+    }
+
+    // 3. Check if old password is correct
+    const isMatch = await bcrypt.compare(oldPassword, user.password);
+    if (!isMatch) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Incorrect old password" });
+    }
+
+    // 4. Hash new password and update user password
     const hashedPassword = await bcrypt.hash(newPassword, 12);
     await prisma.user.update({
       where: { id: user.id },
@@ -362,6 +373,10 @@ export const changePassword = async (req: Request, res: Response) => {
       .json({ success: true, message: "Password changed successfully" });
   } catch (err) {
     console.error("Error changing password:", err);
+    // Handle potential JWT errors explicitly
+    if (err instanceof jwt.JsonWebTokenError) {
+      return res.status(401).json({ success: false, message: "Invalid token" });
+    }
     return res
       .status(500)
       .json({ success: false, message: "Internal server error" });
@@ -416,7 +431,7 @@ export const forgotPassword = async (
     // 4. send reset email
     const resetLink = `${process.env.FRONTEND_URL}/auth/reset-password?token=${newToken}`;
     try {
-      await sendResetEmail(email, resetLink);
+      await sendResetEmail(email, resetPasswordMessage(resetLink));
       res.status(200).json({
         success: true,
         message:
@@ -488,3 +503,253 @@ export const resetPassword = async (
     console.error("Error resetting password:", error);
   }
 };
+
+// request email change
+export const requestEmailChange = async (
+  req: AuthenticatedRequest,
+  res: Response
+) => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) {
+      return res
+        .status(401)
+        .json({ success: false, message: "User not authenticated" });
+    }
+
+    const { newEmail, currentPassword } = req.body;
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!newEmail || !currentPassword) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid request",
+      });
+    }
+    if (!newEmail.includes("@") || !newEmail.includes(".")) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid email address",
+      });
+    }
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+    console.log(newEmail, user.email);
+
+    if (newEmail === user.email) {
+      return res.status(400).json({
+        success: false,
+        message: "New email cannot be the same as the current email",
+      });
+    }
+    // 1. check to existing email
+    const existingEmail = await prisma.user.findUnique({
+      where: { email: newEmail },
+    });
+    if (existingEmail) {
+      return res.status(400).json({
+        success: false,
+        message: "Email already in use",
+      });
+    }
+
+    // 3. check if password is valid
+    const isPasswordValid = await bcrypt.compare(
+      currentPassword,
+      user.password
+    );
+    if (!isPasswordValid) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid password",
+      });
+    }
+
+    // generate code
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 1 * 60 * 60 * 1000); // 1 hour
+
+    console.log(`Generated code for ${newEmail}: ${code}`);
+
+    const verificationRecord = await prisma.emailVerification.upsert({
+      where: { userId },
+      update: {
+        newEmail,
+        code,
+        expiresAt,
+      },
+      create: {
+        userId,
+        newEmail,
+        code,
+        expiresAt,
+      },
+    });
+
+    console.log("Upserted verification record:", verificationRecord);
+
+    try {
+      await sendResetEmail(newEmail, emailVerificationMessage(code));
+      res.status(200).json({
+        success: true,
+        message: "A verification code has been sent to your new email address.",
+      });
+    } catch (err) {
+      console.error("Error sending email:", err);
+      res.status(500).json({
+        success: false,
+        message: "Failed to send email verification code",
+      });
+    }
+  } catch (err) {
+    console.error("Error requesting email change:", err);
+    res.status(500).json({
+      success: false,
+      message: "An unexpected error occurred",
+    });
+  }
+};
+
+// verify email change
+export const verifyEmailChange = async (
+  req: AuthenticatedRequest,
+  res: Response
+) => {
+  try {
+    const { code } = req.body;
+    if (!code) {
+      return res.status(400).json({
+        success: false,
+        message: "Verification code is required",
+      });
+    }
+    const emailVerification = await prisma.emailVerification.findUnique({
+      where: { code },
+    });
+
+    if (!emailVerification) {
+      return res.status(404).json({
+        success: false,
+        message: "Invalid verification code",
+      });
+    }
+
+    if (emailVerification.expiresAt < new Date()) {
+      console.log("3. Verification code has expired.");
+      // Clean up expired token
+      await prisma.emailVerification.delete({
+        where: { id: emailVerification.id },
+      });
+      return res.status(400).json({
+        success: false,
+        message: "Verification code expired",
+      });
+    }
+
+    // Use a transaction to update user and delete verification record
+    await prisma.$transaction(async (tx) => {
+      // 1. Update the user's email
+      await tx.user.update({
+        where: { id: emailVerification.userId },
+        data: { email: emailVerification.newEmail },
+      });
+
+      // 2. Delete the verification record
+      await tx.emailVerification.delete({
+        where: { id: emailVerification.id },
+      });
+    });
+
+    console.log("6. Transaction completed. Sending success response.");
+    return res.status(200).json({
+      success: true,
+      message: "Email updated successfully",
+    });
+  } catch (err) {
+    console.error("7. Error verifying email change:", err);
+    res.status(500).json({
+      success: false,
+      message: "An unexpected error occurred",
+    });
+  }
+};
+
+// // update user information
+// // username and avatar and gender and birthDate
+// // address and phone and fullName
+// export const updateUserInformation = async (
+//   req: AuthenticatedRequest,
+//   res: Response
+// ) => {
+//   try {
+//     const userId = req.user?.userId;
+//     if (!userId) {
+//       return res.status(401).json({
+//         success: false,
+//         message: "User not authenticated",
+//       });
+//     }
+
+//     const { username, gender, birthDate } = req.body;
+
+//     const updateData: {
+//       username?: string;
+//       avatar?: string;
+//       gender?: "MEN" | "WOMEN" | "UNISEX";
+//       birthDate?: Date;
+//     } = {};
+
+//     if (username) {
+//       updateData.username = username;
+//     }
+
+//     // The avatar URL is now in req.file.path thanks to multer-storage-cloudinary
+//     if (req.file) {
+//       updateData.avatar = req.file.path;
+//     }
+
+//     if (gender) {
+//       if (!["MEN", "WOMEN", "UNISEX"].includes(gender)) {
+//         return res
+//           .status(400)
+//           .json({ success: false, message: "Invalid gender value." });
+//       }
+//       updateData.gender = gender;
+//     }
+
+//     if (birthDate) {
+//       updateData.birthDate = new Date(birthDate);
+//     }
+
+//     if (Object.keys(updateData).length === 0) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "No fields to update.",
+//       });
+//     }
+
+//     const updatedUser = await prisma.user.update({
+//       where: { id: userId },
+//       data: updateData,
+//     });
+
+//     return res.status(200).json({
+//       success: true,
+//       message: "User information updated successfully",
+//       user: updatedUser,
+//     });
+//   } catch (err) {
+//     console.error("Error updating user information:", err);
+//     return res.status(500).json({
+//       success: false,
+//       message: "An unexpected error occurred.",
+//     });
+//   }
+// };

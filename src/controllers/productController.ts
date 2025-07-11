@@ -14,7 +14,7 @@ import fs from "fs";
 import { ProductFilters, ProductVariantInput } from "../types/productTypes";
 import { Router } from "express";
 import { authenticateJwt as authMiddleware } from "../middleware/authMiddleware";
-import { uploadMiddleware } from "../middleware/uploadMiddleware";
+import uploadMiddleware from "../middleware/uploadMiddleware";
 
 // Update the FileRequest interface to handle an array of files from upload.any()
 interface FileRequest extends AuthenticatedRequest {
@@ -192,37 +192,77 @@ class ProductController {
       const thumbImageUrl = urlMap.get("thumbImage");
 
       // Reconstruct variants with their image URLs
-      const variants: ProductVariantInput[] = Object.keys(variantsData).map(
-        (key) => {
+      let variants: ProductVariantInput[] = [];
+
+      if (Object.keys(variantsData).length > 0) {
+        // Handle variants sent as separate form fields
+        variants = Object.keys(variantsData).map((key) => {
           const index = parseInt(key, 10);
           const variant = variantsData[index];
           const variantImageUrl = urlMap.get(`variantImage_${index}`);
           return {
             ...variant,
+            id: variant.id || undefined,
             quantity: parseInt(variant.quantity, 10) || 0,
             image: variantImageUrl || "",
           };
-        }
-      );
+        });
+      } else if (parsedData.variants && Array.isArray(parsedData.variants)) {
+        // Handle variants sent as an array of objects
+        console.log("Reconstructing variants from parsedData.variants array");
+        variants = parsedData.variants.map((variant: any, index: number) => {
+          const variantImageUrl = urlMap.get(`variantImage_${index}`);
+          console.log(`Mapping variant ${index} to image: ${variantImageUrl}`);
+          return {
+            ...variant,
+            id: variant.id || undefined,
+            quantity: parseInt(variant.quantity, 10) || 0,
+            image: variantImageUrl || "",
+          };
+        });
+      } else {
+        console.log("No variants data found to process.");
+      }
 
-      // Step 5: Assemble final data and create product
+      console.log("Final variants array before validation:", variants);
+
+      // --> NEW: Automatically derive colors and sizes from variants
+      if (variants.length > 0) {
+        const variantColors = variants.map((v) => v.colorName).filter(Boolean);
+        const variantSizes = variants.map((v) => v.size).filter(Boolean);
+
+        // Use Set to remove duplicates
+        parsedData.colors = [...new Set(variantColors)];
+        parsedData.sizes = [...new Set(variantSizes)];
+
+        console.log("Derived from variants:", {
+          colors: parsedData.colors,
+          sizes: parsedData.sizes,
+        });
+      }
+      // <-- END NEW
+
+      // Step 5: Validate data before transaction
+      const { variants: _, ...validationData } = { ...parsedData, variants };
+
+      const validationError = validateProduct(validationData);
+      if (validationError) {
+        throw new ApiError(400, validationError);
+      }
+      for (const variant of variants) {
+        const variantError = validateVariant(variant);
+        if (variantError) {
+          throw new ApiError(400, `Invalid variant data: ${variantError}`);
+        }
+      }
+
+      // Step 6: Assemble final data and create product
       const productPayload = {
         ...parsedData,
         images: imageUrls,
         thumbImage: thumbImageUrl,
         variants: variants,
       };
-
-      const {
-        variants: _,
-        images: __,
-        thumbImage: ___,
-        ...validationData
-      } = productPayload;
-      const validationError = validateProduct(validationData);
-      if (validationError) {
-        throw new ApiError(400, validationError);
-      }
 
       const product = await this.createProductTransaction(productPayload);
 
@@ -261,11 +301,11 @@ class ProductController {
       isSale,
       isFlashSale,
       isNew,
-      variants, // Reconstructed variants with image URLs
+      variants,
     } = productPayload;
 
     return await prisma.$transaction(async (tx) => {
-      const newProduct = await tx.product.create({
+      const product = await tx.product.create({
         data: {
           name,
           description,
@@ -290,45 +330,27 @@ class ProductController {
               lowStockThreshold: inventory?.lowStockThreshold || 5,
             },
           },
+          variants: {
+            create: variants.map(
+              (variant: ProductVariantInput & { image: string }) => ({
+                color: variant.color,
+                colorCode: variant.colorCode,
+                colorName: variant.colorName || "",
+                size: variant.size,
+                quantity: Number(variant.quantity) || 0,
+                image: variant.image || "",
+              })
+            ),
+          },
         },
         include: {
           category: true,
           inventory: true,
+          variants: true,
         },
       });
 
-      if (variants?.length) {
-        await this.createProductVariants(tx, newProduct.id, variants);
-      }
-
-      return newProduct;
-    });
-  }
-
-  private async createProductVariants(
-    prisma: Prisma.TransactionClient,
-    productId: string,
-    variants: (ProductVariantInput & { image?: string })[]
-  ) {
-    for (const variant of variants) {
-      const variantError = validateVariant(variant);
-      if (variantError) {
-        throw new ApiError(400, `Invalid variant data: ${variantError}`);
-      }
-    }
-
-    const variantsToCreate = variants.map((variant) => ({
-      productId,
-      color: variant.color,
-      colorCode: variant.colorCode,
-      colorName: variant.colorName,
-      size: variant.size,
-      quantity: Number(variant.quantity) || 0,
-      image: variant.image || "", // Ensure image field is included
-    }));
-
-    await prisma.productVariant.createMany({
-      data: variantsToCreate,
+      return product;
     });
   }
 
@@ -340,6 +362,7 @@ class ProductController {
     const { id } = req.params;
     const rawFiles = req.files || [];
     let allUploadedFiles: CloudinaryResponse[] = [];
+    const oldImageUrlsToDelete: string[] = [];
 
     try {
       // Step 1: Fetch existing product
@@ -442,56 +465,76 @@ class ProductController {
               .map((f) => urlMap.get(f.fieldname))
               .filter(Boolean) as string[])
           : existingProduct.images;
+      if (imagesToUpload.length > 0) {
+        oldImageUrlsToDelete.push(...existingProduct.images);
+      }
 
       const newThumbImageUrl =
         thumbImageToUpload.length > 0
           ? urlMap.get("thumbImage")
           : existingProduct.thumbImage;
+      if (thumbImageToUpload.length > 0 && existingProduct.thumbImage) {
+        oldImageUrlsToDelete.push(existingProduct.thumbImage);
+      }
 
-      const newVariants: ProductVariantInput[] = Object.keys(variantsData).map(
-        (key) => {
-          const index = parseInt(key, 10);
-          const variantData = variantsData[index];
-          const newVariantImageUrl = urlMap.get(`variantImage_${index}`);
-          const oldVariant = existingProduct.variants.find(
-            (v) => v.id === variantData.id
-          );
+      // Reconstruct variants with correct image URLs
+      const newVariants: (ProductVariantInput & { id?: any })[] = Object.keys(
+        variantsData
+      ).map((key) => {
+        const index = parseInt(key, 10);
+        const variantData = variantsData[index];
+        const newVariantImageUrl = urlMap.get(`variantImage_${index}`);
+        const oldVariant = existingProduct.variants.find(
+          (v) => v.id.toString() === variantData.id
+        );
 
-          return {
-            ...variantData,
-            quantity: parseInt(variantData.quantity, 10) || 0,
-            image: newVariantImageUrl || oldVariant?.image || "",
-          };
+        // If a new image is uploaded for a variant, mark the old one for deletion
+        if (oldVariant?.image && newVariantImageUrl) {
+          oldImageUrlsToDelete.push(oldVariant.image);
         }
-      );
 
-      const productPayload = {
+        return {
+          id: variantData.id || undefined,
+          colorName: variantData.colorName,
+          color: variantData.color,
+          colorCode: variantData.colorCode,
+          size: variantData.size,
+          quantity: parseInt(variantData.quantity, 10) || 0,
+          image: newVariantImageUrl || oldVariant?.image || "",
+        };
+      });
+
+      // Identify variants that were completely removed to delete their images
+      const incomingVariantIds = new Set(newVariants.map((v) => v.id));
+      existingProduct.variants.forEach((oldVariant: any) => {
+        if (!incomingVariantIds.has(oldVariant.id) && oldVariant.image) {
+          oldImageUrlsToDelete.push(oldVariant.image);
+        }
+      });
+
+      // Step 6: Validate data
+      for (const variant of newVariants) {
+        const variantError = validateVariant(variant);
+        if (variantError) {
+          throw new ApiError(400, `Invalid variant data: ${variantError}`);
+        }
+      }
+
+      const finalProductPayload = {
         ...parsedData,
         images: newImageUrls,
         thumbImage: newThumbImageUrl,
         variants: newVariants,
       };
 
-      // Step 6: Execute update transaction
+      // Step 7: Execute update transaction
       const updatedProduct = await this.updateProductTransaction(
         id,
-        productPayload,
+        finalProductPayload,
         existingProduct
       );
 
-      // Step 7: Cleanup old images from Cloudinary after transaction is successful
-      const oldImageUrlsToDelete: string[] = [];
-      if (imagesToUpload.length > 0) {
-        oldImageUrlsToDelete.push(...existingProduct.images);
-      }
-      if (thumbImageToUpload.length > 0) {
-        oldImageUrlsToDelete.push(existingProduct.thumbImage);
-      }
-      // Delete all old variant images as we replace them entirely
-      oldImageUrlsToDelete.push(
-        ...existingProduct.variants.map((v) => v.image).filter(Boolean)
-      );
-
+      // Step 8: Cleanup old images from Cloudinary after transaction is successful
       await cleanupCloudinaryImages(
         oldImageUrlsToDelete.map((url) => ({ url, public_id: "" }))
       );
@@ -539,13 +582,8 @@ class ProductController {
     } = productPayload;
 
     return await prisma.$transaction(async (tx) => {
-      // 1. Delete old variants
-      await tx.productVariant.deleteMany({
-        where: { productId: id },
-      });
-
-      // 2. Update the product
-      const product = await tx.product.update({
+      // Use a single, powerful update query with nested writes
+      const updatedProduct = await tx.product.update({
         where: { id },
         data: {
           name,
@@ -575,23 +613,48 @@ class ProductController {
               lowStockThreshold: inventory?.lowStockThreshold,
             },
           },
+          variants: {
+            // Delete variants that are no longer in the payload
+            deleteMany: {
+              productId: id,
+              id: {
+                notIn: variants
+                  .map((v: any) => (v.id ? parseInt(v.id, 10) : undefined))
+                  .filter(Boolean),
+              },
+            },
+            // Update existing variants or create new ones
+            upsert: variants.map(
+              (variant: ProductVariantInput & { id?: any; image: string }) => ({
+                where: { id: Number(variant.id) || -1 }, // Use a non-existent ID for creation
+                update: {
+                  color: variant.color,
+                  colorCode: variant.colorCode,
+                  colorName: variant.colorName || "",
+                  size: variant.size,
+                  quantity: Number(variant.quantity) || 0,
+                  image: variant.image,
+                },
+                create: {
+                  color: variant.color,
+                  colorCode: variant.colorCode,
+                  colorName: variant.colorName || "",
+                  size: variant.size,
+                  quantity: Number(variant.quantity) || 0,
+                  image: variant.image,
+                },
+              })
+            ),
+          },
         },
         include: {
           category: true,
           inventory: true,
+          variants: true,
         },
       });
 
-      // 3. Create new variants
-      if (variants?.length) {
-        await this.createProductVariants(tx, id, variants);
-      }
-
-      // Return the updated product with its new variants
-      return await tx.product.findUnique({
-        where: { id },
-        include: { variants: true, inventory: true, category: true },
-      });
+      return updatedProduct;
     });
   }
 
@@ -1070,17 +1133,24 @@ class ProductController {
 
       const review = await prisma.review.create({
         data: {
-          productId: id,
-          userId,
-          rate: parseInt(rate),
+          rate: parseInt(rate, 10),
           message,
           color,
           size,
-          likes: parseInt(likes),
+          product: {
+            connect: { id },
+          },
+          user: {
+            connect: { id: userId },
+          },
         },
         include: {
           user: {
-            select: { id: true, username: true},
+            select: {
+              id: true,
+              username: true,
+              avatar: true,
+            },
           },
         },
       });
@@ -1164,6 +1234,25 @@ class ProductController {
     }
   };
 
+  // gel variant by product id
+  public getProductVariants: RequestHandler = async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const variants = await prisma.productVariant.findMany({
+        where: { productId: id },
+      });
+      res.json({
+        success: true,
+        data: variants,
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: "Internal server error",
+      });
+      next(error);
+    }
+  };
 
   public searchProducts: RequestHandler = async (req, res, next) => {
     try {
@@ -1233,5 +1322,6 @@ class ProductController {
     }
   };
 }
+
 
 export const productController = new ProductController();

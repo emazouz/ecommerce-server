@@ -13,6 +13,9 @@ import path from "path";
 import couponRoute from "./routes/couponRoute";
 import bannerRoute from "./routes/bannerRoute";
 import cartRoute from "./routes/cartRoute";
+import wishlistRoute from "./routes/wishlistRoute";
+import compareRoute from "./routes/compareRoute";
+import orderRoute from "./routes/orderRoute";
 
 dotenv.config();
 
@@ -42,6 +45,10 @@ app.use("/api/profile", profileRoute);
 app.use("/api/coupons", couponRoute);
 app.use("/api/banners", bannerRoute);
 app.use("/api/cart", cartRoute);
+app.use("/api/wishlist", wishlistRoute);
+app.use("/api/compare", compareRoute);
+app.use("/api/orders", orderRoute);
+
 app.get("/", (req, res) => {
   res.send("Hello from E-commerce API");
 });

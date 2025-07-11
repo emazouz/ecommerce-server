@@ -23,6 +23,7 @@ enum Gender {
 }
 
 enum CartStatus {
+  ACTIVE // نشطة
   PENDING // معلقة
   PAID // مدفوعة
   CANCELLED // ملغاة
@@ -91,6 +92,60 @@ enum BannerType {
   OTHER
 }
 
+enum PaymentMethod {
+  COD
+  CREDIT_CARD
+  PAYPAL
+  STRIPE
+  BANK_TRANSFER
+}
+
+enum ReportType {
+  SALES
+  INVENTORY
+  USER_ACTIVITY
+}
+
+enum FileFormat {
+  JSON
+  CSV
+  PDF
+}
+
+enum JobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum Carrier {
+  DHL
+  FEDEX
+  UPS
+  USPS
+}
+
+enum RefundReason {
+  DEFECTIVE_ITEM
+  WRONG_ITEM
+  NOT_AS_DESCRIBED
+  CUSTOMER_CHOICE
+  OTHER
+}
+
+enum RefundStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  PROCESSED
+}
+
+enum RefundMethod {
+  ORIGINAL_PAYMENT_METHOD
+  STORE_CREDIT
+}
+
 // ==============================================================================
 // MODELS - نماذج البيانات
 // ==============================================================================
@@ -118,13 +173,15 @@ model User {
   reviews                Review[] // قائمة المراجعات التي كتبها المستخدم
   carts                  Cart[] // قائمة عربات التسوق الخاصة بالمستخدم
   orders                 Order[] // قائمة الطلبات التي قام بها المستخدم
-  notifications          Notification[]
+  notifications          Notification[]      @relation("UserNotifications")
+  sentNotifications      Notification[]      @relation("SenderNotifications")
   wishlists              Wishlist[]
   compares               Compare[]
   blogPosts              BlogPost[]
   adminLogs              AdminLog[]
   replies                Reply[]
   emailVerifications     EmailVerification[]
+  coupons                Coupon[]
 }
 
 // --- Banner Model ---
@@ -181,9 +238,11 @@ model Address {
 // --- Product and Catalog Models ---
 
 model Category {
-  id       Int       @id @default(autoincrement()) // المعرف الفريد للفئة
-  name     String    @unique // اسم الفئة (فريد)
+  id       Int        @id @default(autoincrement()) // المعرف الفريد للفئة
+  name     String     @unique // اسم الفئة (فريد)
   products Product[] // قائمة المنتجات ضمن هذه الفئة
+  coupons  Coupon[]
+  BlogPost BlogPost[]
 }
 
 // --- Product and Type Models ---
@@ -192,6 +251,7 @@ model ProductType {
   id       Int       @id @default(autoincrement()) // المعرف الفريد للنوع
   name     String    @unique // اسم النوع (فريد)
   products Product[] // قائمة المنتجات ضمن هذا النوع
+  Coupon   Coupon[]
 }
 
 model FlashSale {
@@ -207,55 +267,44 @@ model FlashSale {
 }
 
 model Product {
-  id               String           @id @default(uuid()) // المعرف الفريد للمنتج
-  name             String // اسم المنتج
-  description      String // وصف المنتج
-  aboutProduct     String[] // وصف المنتج
-  price            Decimal // السعر الحالي
-  originPrice      Decimal // السعر الأصلي
-  slug             String           @unique // رابط فريد للمنتج
-  type             ProductType?     @relation(fields: [typeId], references: [id]) // نوع المنتج
-  typeId           Int? // مفتاح خارجي لربط المنتج بالنوع
-  gender           Gender // الفئة الجنسية للمنتج
-  brand            String // العلامة التجارية
-  thumbImage       String // صور مصغرة للمنتج
-  images           String[] // صور المنتج
-  isSale           Boolean          @default(false) // هل المنتج في التخفيضات؟
-  isFlashSale      Boolean          @default(false) // هل المنتج في التخفيضات الفورية؟
-  isNew            Boolean          @default(false) // هل المنتج جديد؟
-  rate             Float            @default(0) // متوسط تقييم المنتج
-  sold             Int              @default(0) // عدد القطع المباعة
-  quantityPurchase Int              @default(0) // عدد مرات الشراء
-  action           String? // إجراء خاص بالمنتج (اختياري)
-  weight           Decimal? // الوزن المحدد للمنتج
-  sizes            String[] // حجم المنتج
-  colors           String[] // لون المنتج
-  createdAt        DateTime         @default(now()) // تاريخ إضافة المنتج
-  updatedAt        DateTime         @updatedAt // تاريخ آخر تحديث للمنتج
-  category         Category         @relation(fields: [categoryId], references: [id]) // علاقة مع الفئة
-  categoryId       Int // مفتاح خارجي لربط المنتج بالفئة
-  variants         ProductVariant[] // قائمة متغيرات المنتج
-  reviews          Review[] // قائمة مراجعات المنتج
-  cartItems        CartItem[] // قائمة عناصر عربة التسوق المرتبطة بالمنتج
-  orderItems       OrderItem[] // قائمة عناصر الطلبات المرتبطة بالمنتج
-  flashSale        FlashSale? // علاقة مع الخصم الفوري
-  inventory        Inventory?
-  wishlists        Wishlist[]
-  compares         Compare[]
-}
-
-// --- Payment Model ---
-
-model Payment {
-  id            String        @id @default(uuid()) // معرّف فريد للمدفوعات
-  orderId       String // معرف الطلب المرتبط بالمدفوعات
-  amount        Decimal // المبلغ المدفوع
-  paymentMethod String // طريقة الدفع
-  paymentStatus PaymentStatus // حالة الدفع
-  transactionId String? // رقم المعاملة (اختياري)
-  createdAt     DateTime      @default(now()) // تاريخ إنشاء المدفوعات
-  updatedAt     DateTime      @updatedAt // تاريخ آخر تحديث للمدفوعات
-  order         Order         @relation(fields: [orderId], references: [id]) // علاقة مع الطلب
+  id                String           @id @default(uuid()) // المعرف الفريد للمنتج
+  name              String // اسم المنتج
+  description       String // وصف المنتج
+  aboutProduct      String[] // وصف المنتج
+  price             Decimal // السعر الحالي
+  originPrice       Decimal // السعر الأصلي
+  slug              String           @unique // رابط فريد للمنتج
+  type              ProductType?     @relation(fields: [typeId], references: [id]) // نوع المنتج
+  typeId            Int? // مفتاح خارجي لربط المنتج بالنوع
+  gender            Gender // الفئة الجنسية للمنتج
+  brand             String // العلامة التجارية
+  thumbImage        String // صور مصغرة للمنتج
+  images            String[] // صور المنتج
+  isSale            Boolean          @default(false) // هل المنتج في التخفيضات؟
+  isFlashSale       Boolean          @default(false) // هل المنتج في التخفيضات الفورية؟
+  isNew             Boolean          @default(false) // هل المنتج جديد؟
+  isWishlist        Boolean?         @default(false) // هل المنتج في المفضلة؟
+  isCompare         Boolean?         @default(false) // هل المنتج في المقارنة؟
+  rate              Float            @default(0) // متوسط تقييم المنتج
+  sold              Int              @default(0) // عدد القطع المباعة
+  quantityPurchase  Int              @default(0) // عدد مرات الشراء
+  action            String? // إجراء خاص بالمنتج (اختياري)
+  weight            Decimal? // الوزن المحدد للمنتج
+  sizes             String[] // حجم المنتج
+  colors            String[] // لون المنتج
+  createdAt         DateTime         @default(now()) // تاريخ إضافة المنتج
+  updatedAt         DateTime         @updatedAt // تاريخ آخر تحديث للمنتج
+  category          Category         @relation(fields: [categoryId], references: [id]) // علاقة مع الفئة
+  categoryId        Int // مفتاح خارجي لربط المنتج بالفئة
+  variants          ProductVariant[] // قائمة متغيرات المنتج
+  reviews           Review[] // قائمة مراجعات المنتج
+  cartItems         CartItem[] // قائمة عناصر عربة التسوق المرتبطة بالمنتج
+  orderItems        OrderItem[] // قائمة عناصر الطلبات المرتبطة بالمنتج
+  flashSale         FlashSale? // علاقة مع الخصم الفوري
+  inventory         Inventory?
+  wishlists         Wishlist[]
+  compares          Compare[]
+  excludedByCoupons Coupon[]         @relation("ExcludedProducts")
 }
 
 // --- Inventory Model ---
@@ -268,43 +317,6 @@ model Inventory {
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
   product           Product  @relation(fields: [productId], references: [id])
-}
-
-// --- Notification Model ---
-
-model Notification {
-  id        String           @id @default(uuid()) // معرّف فريد للإشعار
-  userId    String // معرف المستخدم
-  message   String // محتوى الإشعار
-  type      NotificationType
-  isRead    Boolean          @default(false) // حالة الإشعار
-  createdAt DateTime         @default(now()) // تاريخ إنشاء الإشعار
-  updatedAt DateTime         @updatedAt // تاريخ آخر تحديث للإشعار
-  user      User             @relation(fields: [userId], references: [id]) // علاقة مع المستخدم
-}
-
-// --- Report Model ---
-
-model Report {
-  id          String   @id @default(uuid()) // معرّف فريد للتقرير
-  reportType  String // نوع التقرير
-  data        Json // بيانات التقرير بصيغة JSON
-  createdAt   DateTime @default(now()) // تاريخ إنشاء التقرير
-  updatedAt   DateTime @updatedAt // تاريخ آخر تحديث للتقرير
-  generatedBy String // الشخص الذي أنشأ التقرير
-}
-
-// --- Refund Model ---
-
-model Refund {
-  id           String        @id @default(uuid()) // معرّف فريد لاسترداد المبلغ
-  orderId      String // معرف الطلب المرتبط باسترداد المبلغ
-  amount       Decimal // المبلغ المسترد
-  reason       String // سبب الاسترداد
-  refundStatus PaymentStatus // حالة الاسترداد
-  createdAt    DateTime      @default(now()) // تاريخ استرداد المبلغ
-  updatedAt    DateTime      @updatedAt // تاريخ آخر تحديث لاسترداد المبلغ
-  order        Order         @relation(fields: [orderId], references: [id]) // علاقة مع الطلب
 }
 
 model ProductVariant {
@@ -353,107 +365,273 @@ model Reply {
   userId    String
 }
 
+// --- Notification Model ---
+model Notification {
+  id          String           @id @default(uuid())
+  userId      String // المستلم
+  senderId    String? // المرسل (لإشعارات مثل "قام X بمتابعتك")
+  title       String // عنوان الإشعار
+  message     String // المحتوى
+  type        NotificationType // ORDER, PROMOTION, SYSTEM, etc.
+  isRead      Boolean          @default(false)
+  isDeleted   Boolean          @default(false) // للإخفاء دون حذف
+  metadata    Json?            @db.Json // بيانات إضافية
+  relatedId   String? // ID للعنصر المرتبط (طلب، منتج، etc.)
+  relatedType String? // نوع العنصر المرتبط
+  createdAt   DateTime         @default(now())
+  readAt      DateTime? // وقت القراءة
+
+  user   User  @relation("UserNotifications", fields: [userId], references: [id])
+  sender User? @relation("SenderNotifications", fields: [senderId], references: [id])
+
+  @@index([userId, isRead])
+}
+
+// --- Report Model ---
+model Report {
+  id          String     @id @default(uuid())
+  name        String // اسم التقرير المعروض
+  reportType  ReportType // SALES, INVENTORY, USER_ACTIVITY, etc.
+  format      FileFormat @default(JSON) // JSON, CSV, PDF, etc.
+  data        Json       @db.Json
+  status      JobStatus  @default(COMPLETED) // PENDING, PROCESSING, COMPLETED, FAILED
+  filters     Json?      @db.Json // معايير التصفية المستخدمة
+  generatedBy String // ID المستخدم/النظام الذي أنشأ التقرير
+  downloadUrl String? // رابط التحميل للتقرير الكبير
+  expiresAt   DateTime? // تاريخ انتهاء صلاحية التقرير
+  createdAt   DateTime   @default(now())
+
+  @@index([reportType, createdAt])
+}
+
 // --- Coupon Model ---
 
 model Coupon {
-  id            String       @id @default(uuid()) // معرّف فريد للكوبون
-  code          String       @unique // كود الكوبون الفريد
-  discountType  DiscountType @default(PERCENTAGE) // نوع الخصم: "percentage" أو "fixed"
-  discountValue Decimal // قيمة الخصم: يمكن أن تكون نسبة مئوية أو مبلغ ثابت
-  startDate     DateTime // تاريخ بدء الصلاحية
-  endDate       DateTime // تاريخ نهاية الصلاحية
-  isActive      Boolean      @default(true) // حالة الكوبون
-  usedCount     Int          @default(0) // عدد المرات المستخدمة
-  maxUsage      Int          @default(1) // عدد المرات المستخدمة المحددة
-  minOrderValue Decimal      @default(0) // القيمة الأدنى للطلب المطلوب لتطبيق الكوبون
-  createdAt     DateTime     @default(now()) // تاريخ إنشاء الكوبون
-  updatedAt     DateTime     @updatedAt // تاريخ آخر تحديث للكوبون
-  orders        Order[]
+  id               String       @id @default(uuid())
+  code             String       @unique
+  description      String? // وصف للكوبون (عرضه في الواجهة)
+  discountType     DiscountType @default(PERCENTAGE)
+  discountValue    Decimal      @db.Decimal(10, 2)
+  maxDiscount      Decimal?     @db.Decimal(10, 2) // أقصى خصم (للكوبونات النسبية)
+  startDate        DateTime
+  endDate          DateTime
+  isActive         Boolean      @default(true)
+  isPublic         Boolean      @default(true) // هل الكوبون متاح للجميع؟
+  usedCount        Int          @default(0)
+  maxUsage         Int? // الحد الأقصى للاستخدام (null = غير محدود)
+  maxUsagePerUser  Int          @default(1) // الحد الأقصى للاستخدام لكل مستخدم
+  minOrderValue    Decimal      @default(0) @db.Decimal(12, 2)
+  applicableTo     ProductType? @relation(fields: [productTypeId], references: [id]) // يمكن تحديد نوع منتجات معينة
+  categories       Category[] // فئات المنتجات المنطبقة عليها
+  excludedProducts Product[]    @relation("ExcludedProducts") // منتجات مستثناة
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  orders           Order[]
+  users            User[] // مستخدمون محددون للكوبون
+  productTypeId    Int?
+  Cart             Cart[]
 }
 
 // --- E-commerce Models (Cart, Order) ---
-
 model Cart {
-  id                String         @id @default(uuid()) // معرّف عربة التسوق
-  total             Decimal        @default(0) // إجمالي المبلغ في العربة
-  totalWithDiscount Decimal        @default(0) // الإجمالي بعد الخصم
-  status            CartStatus     @default(PENDING) // حالة العربة
-  paymentStatus     PaymentStatus  @default(PENDING) // حالة الدفع
-  shippingStatus    ShippingStatus @default(PENDING) // حالة الشحن
-  discountCode      String? // رمز الخصم المطبق
-  discountAmount    Decimal        @default(0) // المبلغ المخصوم
-  notes             String? // ملاحظات المستخدم
-  createdAt         DateTime       @default(now()) // تاريخ الإنشاء
-  updatedAt         DateTime       @updatedAt // تاريخ التحديث
-  user              User           @relation(fields: [userId], references: [id])
-  userId            String // معرف المستخدم
-  cartItems         CartItem[] // قائمة العناصر في العربة
+  id                String                @id @default(uuid())
+  sessionId         String? // لغير المسجلين
+  totalItems        Int                   @default(0) // عدد العناصر الإجمالي
+  subtotal          Decimal               @default(0) @db.Decimal(12, 2) // المجموع قبل الخصومات والضرائب
+  taxAmount         Decimal               @default(0) @db.Decimal(12, 2) // قيمة الضرائب
+  shippingAmount    Decimal               @default(0) @db.Decimal(12, 2) // تكلفة الشحن
+  discountAmount    Decimal               @default(0) @db.Decimal(12, 2)
+  total             Decimal               @default(0) @db.Decimal(12, 2)
+  currency          String                @default("USD") // عملة الدفع
+  status            CartStatus            @default(ACTIVE) // ACTIVE, ABANDONED, CONVERTED
+  paymentMethod     PaymentMethod?        @default(PAYPAL) // طريقة الدفع المختارة
+  shippingMethod    ShippingMethodStatus? // طريقة الشحن المختارة
+  estimatedDelivery String? // تقدير وقت التوصيل
+  notes             String? // ملاحظات العميل
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+  expiresAt         DateTime? // تاريخ انتهاء صلاحية العربة
+
+  // العلاقات
+  user            User?      @relation(fields: [userId], references: [id])
+  userId          String?
+  coupon          Coupon?    @relation(fields: [couponId], references: [id])
+  couponId        String?
+  cartItems       CartItem[]
+  shippingAddress Json?      @db.Json // عنوان الشحن المختار
 }
 
 // --- Cart Item Model ---
-
 model CartItem {
-  id        Int             @id @default(autoincrement()) // معرّف العنصر في العربة
-  quantity  Int             @default(1) // الكمية
-  price     Decimal // السعر الفردي للمنتج
-  createdAt DateTime        @default(now()) // تاريخ الإنشاء
-  updatedAt DateTime        @updatedAt // تاريخ التحديث
+  id            String   @id @default(uuid())
+  quantity      Int      @default(1)
+  originalPrice Decimal  @db.Decimal(12, 2) // السعر الأصلي للمنتج
+  salePrice     Decimal  @db.Decimal(12, 2) // السعر بعد الخصم (إن وجد)
+  price         Decimal  @db.Decimal(12, 2) // السعر الفعلي (قد يكون original أو sale)
+  totalPrice    Decimal  @db.Decimal(12, 2) // السعر × الكمية
+  isGift        Boolean  @default(false) // هل العنصر هدية؟
+  giftMessage   String? // رسالة الهدية
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // العلاقات
   cart      Cart            @relation(fields: [cartId], references: [id])
-  cartId    String // مفتاح خارجي للعربة
+  cartId    String
   product   Product         @relation(fields: [productId], references: [id])
-  productId String // مفتاح خارجي للمنتج
+  productId String
   variant   ProductVariant? @relation(fields: [variantId], references: [id])
   variantId Int?
+
+  // معلومات إضافية محفوظة
+  productName  String // اسم المنتج وقت الإضافة
+  productImage String? // صورة المنتج الرئيسية
+  productSlug  String // رابط المنتج
+  sku          String? // كود المخزون
+  stock        Int? // الكمية المتاحة وقت الإضافة
+
+  // خصائص المتغير
+  color      String?
+  size       String?
+  weight     Decimal? @db.Decimal(10, 2)
+  dimensions Json?    @db.Json // {length, width, height}
+
+  // خيارات إضافية
+  customization Json? @db.Json // تخصيصات إضافية
 }
 
 // --- Order Model ---
-
 model Order {
-  id              String               @id @default(uuid()) // معرف الطلب
-  totalAmount     Decimal              @default(0) // المبلغ الإجمالي
-  paymentStatus   PaymentStatus        @default(PENDING) // حالة الدفع
-  shippingStatus  ShippingStatus       @default(PENDING) // حالة الشحن
-  shippingAddress String // عنوان الشحن
-  shippingMethod  ShippingMethodStatus @default(STANDARD) // طريقة الشحن
-  orderStatus     OrderStatus          @default(PENDING) // حالة الطلب
-  paymentMethod   String // طريقة الدفع
-  createdAt       DateTime             @default(now()) // تاريخ الإنشاء
-  updatedAt       DateTime             @updatedAt // تاريخ التحديث
-  coupon          Coupon?              @relation(fields: [couponId], references: [id]) // العلاقة مع الكوبون
-  couponId        String? // معرّف الكوبون المرتبط
-  userId          String // معرف المستخدم
-  user            User                 @relation(fields: [userId], references: [id]) // علاقة مع المستخدم
-  orderItems      OrderItem[] // العناصر المرتبطة بالطلب
-  Shipment        Shipment[] // معلومات الشحن
-  payments        Payment[]
-  refunds         Refund[]
+  id          String      @id @default(uuid())
+  orderNumber String      @unique // رقم طلب يمكن قراءته بواسطة الإنسان
+  user        User        @relation(fields: [userId], references: [id])
+  userId      String
+  orderItems  OrderItem[]
+
+  // Pricing
+  itemsPrice     Decimal @db.Decimal(12, 2) // سعر المنتجات فقط
+  shippingPrice  Decimal @db.Decimal(12, 2) // سعر الشحن
+  taxPrice       Decimal @db.Decimal(12, 2) // الضرائب
+  discountAmount Decimal @db.Decimal(12, 2) // إجمالي الخصم
+  totalAmount    Decimal @db.Decimal(12, 2) // المبلغ النهائي
+
+  // Payment
+  paymentMethod String // COD, CreditCard, PayPal, etc.
+  paymentStatus PaymentStatus @default(PENDING) // PENDING, PAID, FAILED, REFUNDED
+  paymentResult Json?         @db.Json // تفاصيل الاستجابة من بوابة الدفع
+  transactionId String? // معرّف المعاملة من بوابة الدفع
+
+  // Shipping
+  shippingAddress Json                 @db.Json // {address, city, postalCode, country}
+  shippingMethod  ShippingMethodStatus @default(STANDARD) // STANDARD, EXPRESS
+  shippingStatus  ShippingStatus       @default(PENDING) // PENDING, PROCESSING, SHIPPED, DELIVERED
+  trackingNumber  String?
+  trackingUrl     String?
+
+  // Status
+  orderStatus OrderStatus @default(PENDING) // PENDING, CONFIRMED, CANCELLED, COMPLETED
+  isDelivered Boolean     @default(false)
+  deliveredAt DateTime?
+
+  // Coupon
+  coupon     Coupon? @relation(fields: [couponId], references: [id])
+  couponId   String?
+  couponCode String? // حفظ كود الخصم حتى لو تم حذف الكوبون
+
+  // Metadata
+  notes      String? // ملاحظات إضافية من العميل
+  adminNotes String? // ملاحظات إدارية
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  // Relations
+  shipment Shipment[]
+  refund   Refund[]
+  Payment  Payment[]
 }
 
-// --- Order Item Model ---
-
 model OrderItem {
-  id        String   @id @default(uuid()) // معرف العنصر في الطلب
-  quantity  Int      @default(1) // الكمية
-  price     Decimal // السعر
-  createdAt DateTime @default(now()) // تاريخ الإضافة
-  updatedAt DateTime @updatedAt // تاريخ التحديث
-  order     Order    @relation(fields: [orderId], references: [id])
-  orderId   String // مفتاح خارجي للطلب المرتبط
-  product   Product  @relation(fields: [productId], references: [id])
-  productId String // مفتاح خارجي للمنتج
+  id          String  @id @default(uuid())
+  order       Order   @relation(fields: [orderId], references: [id])
+  orderId     String
+  product     Product @relation(fields: [productId], references: [id])
+  productId   String
+  productName String // حفظ اسم المنتج وقت الطلب
+  productSlug String // حفظ رابط المنتج
+  image       String // صورة المنتج وقت الطلب
+  price       Decimal @db.Decimal(12, 2) // السعر وقت الطلب
+  quantity    Int     @default(1)
+
+  // Variants
+  color  String?
+  size   String?
+  weight Decimal? @db.Decimal(10, 2)
+  sku    String? // كود المخزون
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// --- Payment Model ---
+model Payment {
+  id             String        @id @default(uuid())
+  order          Order         @relation(fields: [orderId], references: [id])
+  orderId        String
+  amount         Decimal       @db.Decimal(12, 2)
+  currency       String        @default("USD")
+  paymentMethod  PaymentMethod // CREDIT_CARD, PAYPAL, etc.
+  provider       String? // "Stripe", "PayPal", etc.
+  status         PaymentStatus
+  transactionId  String?
+  receiptUrl     String? // رابط إيصال الدفع
+  refundedAmount Decimal       @default(0) @db.Decimal(12, 2)
+  paymentDetails Json?         @db.Json // تفاصيل الدفع الكاملة
+  createdAt      DateTime      @default(now())
+  processedAt    DateTime? // وقت اكتمال الدفع/الرفض
+  Refund         Refund[]
+
+  @@index([orderId, status])
 }
 
 // --- Shipment Model ---
-
 model Shipment {
-  id               String         @id @default(uuid()) // معرّف الشحنة
-  trackingNumber   String // رقم التتبع
-  status           ShipmentStatus // حالة الشحنة
-  shippingDate     DateTime // تاريخ الشحن
-  estimatedArrival DateTime // الوصول المتوقع
-  carrier          String // شركة الشحن
-  orderId          String // معرف الطلب
-  order            Order          @relation(fields: [orderId], references: [id]) // علاقة مع الطلب
+  id               String         @id @default(uuid())
+  order            Order          @relation(fields: [orderId], references: [id])
+  orderId          String
+  trackingNumber   String
+  carrier          Carrier // DHL, FedEx, etc.
+  service          String? // "Express", "Standard", etc.
+  status           ShipmentStatus
+  shippingDate     DateTime?
+  deliveredAt      DateTime?
+  estimatedArrival DateTime?
+  trackingUrl      String?
+  shippingLabel    String? // رابط ملصق الشحن
+  weight           Decimal?       @db.Decimal(10, 2) // الوزن الكلي
+  dimensions       String? // الأبعاد "20x30x15 cm"
+  cost             Decimal?       @db.Decimal(10, 2) // تكلفة الشحن الفعلية
+  address          Json           @db.Json // عنوان الشحن (نسخة عند الشحن)
+  items            Json           @db.Json // قائمة العناصر المشحونة
+
+  @@index([orderId, trackingNumber])
+}
+
+// --- Refund Model ---
+model Refund {
+  id          String       @id @default(uuid())
+  order       Order        @relation(fields: [orderId], references: [id])
+  orderId     String
+  payment     Payment?     @relation(fields: [paymentId], references: [id])
+  paymentId   String?
+  amount      Decimal      @db.Decimal(12, 2)
+  reason      RefundReason
+  description String?
+  status      RefundStatus
+  processedBy String? // ID المسؤول عن المعالجة
+  processedAt DateTime?
+  method      RefundMethod // ORIGINAL, CREDIT, etc.
+  createdAt   DateTime     @default(now())
+
+  @@index([orderId, status])
 }
 
 // --- Wishlist Model ---
@@ -480,24 +658,29 @@ model Compare {
 }
 
 // --- Blog Model ---
-
 model BlogPost {
   id          String     @id @default(uuid())
-  category    String
-  tag         String
   title       String
+  slug        String     @unique
   author      User       @relation(fields: [authorId], references: [id])
   authorId    String
-  avatar      String
-  thumbImg    String
-  coverImg    String
-  subImg      String[]
-  shortDesc   String
-  description String
-  slug        String
+  category    Category?  @relation(fields: [categoryId], references: [id])
+  categoryId  Int?
+  tags        String[]
+  content     Json       @db.Json // المحتوى المنظم (للمحرر المرئي)
+  excerpt     String? // ملخص المقال
+  featured    Boolean    @default(false)
   status      PostStatus @default(DRAFT)
+  seoTitle    String?
+  seoDesc     String?
+  seoKeywords String?
+  images      Json?      @db.Json // {thumbnail, cover, gallery}
+  views       Int        @default(0)
+  publishedAt DateTime?
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
+
+  @@index([slug, status, publishedAt])
 }
 
 // --- Admin Log Model ---

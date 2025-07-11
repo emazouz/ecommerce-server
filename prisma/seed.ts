@@ -2,18 +2,14 @@ import { PrismaClient } from "@prisma/client";
 const prisma = new PrismaClient();
 
 async function main() {
-  await prisma.productType.createMany({
-    data: [
-     {name: "top"},
-     {name: "t-shirt"},
-     {name: "dress"},
-     {name: "sets"},
-     {name: "shirt"},
-     {name: "bottom"},
-     {name: "pants"},
-    ],
+    await prisma.user.create({
+    data: {
+      username: "admin",
+      email: "admin@admin.com",
+      password: "admin1234",
+      role: "ADMIN",
+    },
   });
-  console.log("Product Types created.");
 }
 
 main()

@@ -3,6 +3,7 @@ import {
   createCoupon,
   deleteCoupon,
   fetchAllCoupons,
+  getCouponById,
   updateCoupon,
   applyCoupon,
 } from "../controllers/couponController";
@@ -15,9 +16,10 @@ router
   .route("/")
   .get(authenticateJwt, isAdmin, fetchAllCoupons)
   .post(authenticateJwt, isAdmin, createCoupon);
-
-router
+  
+  router
   .route("/:id")
+  .get(authenticateJwt, isAdmin, getCouponById)
   .put(authenticateJwt, isAdmin, updateCoupon)
   .delete(authenticateJwt, isAdmin, deleteCoupon);
 

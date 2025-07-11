@@ -6,7 +6,7 @@ import {
   deleteBanner,
 } from "../controllers/bannerController";
 import { authenticateJwt, isAdmin } from "../middleware/authMiddleware";
-import { uploadMiddleware } from "../middleware/uploadMiddleware";
+import uploadMiddleware from "../middleware/uploadMiddleware";
 
 const router = Router();
 

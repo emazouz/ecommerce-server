@@ -10,24 +10,25 @@ const fileFilter = (
   file: Express.Multer.File,
   cb: multer.FileFilterCallback
 ) => {
-  if (file.mimetype.startsWith("image")) {
-    cb(null, true);
-  } else {
-    cb(new Error("Only image files are allowed!"));
-  }
+  // Allow all file types for now, you might want to restrict this
+  cb(null, true);
 };
 
 // Create multer instance
 const upload = multer({
   storage,
-  fileFilter,
   limits: {
-    fileSize: 5 * 1024 * 1024, // 5MB
-    files: 10, // Maximum 10 files
+    fileSize: 15 * 1024 * 1024, // 15 MB
+  },
+  fileFilter: (req, file, cb) => {
+    // Allow all file types for now, you might want to restrict this
+    cb(null, true);
   },
 });
 
 // Export middleware
 // We use .any() to accept all files regardless of the field name.
 // This is more flexible for handling main images, thumb images, and variant images.
-export const uploadMiddleware = upload.any();
+const uploadMiddleware = upload.any();
+
+export default uploadMiddleware;

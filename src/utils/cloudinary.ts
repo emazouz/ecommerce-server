@@ -15,11 +15,13 @@ export const uploadToCloudinary = (
   return new Promise((resolve, reject) => {
     const uploadStream = cloudinary.uploader.upload_stream(
       {
-        folder: `ecommerce/${folder}`,
         resource_type: "auto",
+        folder: `ecommerce/${folder}`,
+        timeout: 120000,
       },
       (error, result) => {
         if (error) {
+          console.error("Cloudinary upload error:", error);
           return reject(
             new Error(`Error uploading to Cloudinary: ${error.message}`)
           );
@@ -31,6 +33,7 @@ export const uploadToCloudinary = (
         }
         resolve({
           url: result.secure_url,
+          secure_url: result.secure_url,
           public_id: result.public_id,
         });
       }

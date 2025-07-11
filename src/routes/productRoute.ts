@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { productController } from "../controllers/productController";
 import { authenticateJwt as authMiddleware } from "../middleware/authMiddleware";
-import { uploadMiddleware } from "../middleware/uploadMiddleware";
+import uploadMiddleware from "../middleware/uploadMiddleware";
 
 const router = Router();
 
@@ -10,6 +10,7 @@ router.get("/", productController.getAllProducts);
 router.get("/search", productController.searchProducts);
 router.get("/:id", productController.getProduct);
 router.get("/:id/reviews", productController.getProductReviews);
+router.get("/:id/variants", productController.getProductVariants);
 
 // Protected routes - require authentication
 router.use(authMiddleware);

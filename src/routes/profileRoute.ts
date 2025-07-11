@@ -6,7 +6,7 @@ import {
   testUpdateAddress,
 } from "../controllers/profileController";
 import { authenticateJwt } from "../middleware/authMiddleware";
-import { uploadMiddleware } from "../middleware/uploadMiddleware";
+import uploadMiddleware from "../middleware/uploadMiddleware";
 
 const router = Router();
 

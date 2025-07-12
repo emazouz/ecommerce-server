@@ -100,7 +100,8 @@ export const validateVariant = (data: ProductVariantInput): string | null => {
   if (!data.colorName?.trim()) return "Color name is required";
   if (!data.color?.trim()) return "Color is required";
   if (!data.colorCode?.trim()) return "Color code is required";
-  if (!data.image?.trim()) return "Variant image is required";
+  // Allow empty image for variants (will use default or placeholder)
+  if (data.image === undefined) return "Variant image field is required";
   if (!data.size?.trim()) return "Size is required";
   if (typeof data.quantity !== "number" || data.quantity < 0)
     return "Valid quantity is required";

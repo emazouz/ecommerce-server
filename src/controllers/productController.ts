@@ -21,6 +21,39 @@ interface FileRequest extends AuthenticatedRequest {
   files?: Express.Multer.File[];
 }
 
+// Enhanced product creation interface with better type safety
+interface ProductCreationData {
+  name: string;
+  description: string;
+  aboutProduct: string[];
+  price: number;
+  originPrice: number;
+  categoryId: number;
+  typeId?: number;
+  weight?: number;
+  gender: string;
+  brand: string;
+  sizes: string[];
+  colors: { name: string; code: string }[];
+  inventory: {
+    quantity: number;
+    lowStockThreshold?: number;
+  };
+  isSale?: boolean;
+  isFlashSale?: boolean;
+  isNew?: boolean;
+  isActive?: boolean;
+  isFeatured?: boolean;
+  tags?: string[];
+  sku?: string;
+  minimumOrderQty?: number;
+  maximumOrderQty?: number;
+  metaTitle?: string;
+  metaDescription?: string;
+  metaKeywords?: string[];
+  variants: ProductVariantInput[];
+}
+
 // Helper function to handle file uploads
 const handleFileUploads = async (
   files: Express.Multer.File[],
@@ -51,6 +84,111 @@ const cleanupFiles = async (files: Express.Multer.File[]): Promise<void> => {
   }
 };
 
+// Helper function to parse multipart form data
+const parseMultipartFormData = (body: any) => {
+  const parsedData: { [key: string]: any } = {};
+  const variantsData: { [key: number]: any } = {};
+
+  // Parse JSON fields and separate variant fields
+  for (const key in body) {
+    if (key.startsWith("variants[")) {
+      const match = key.match(/variants\[(\d+)\]\[(\w+)\]/);
+      if (match) {
+        const [, indexStr, field] = match;
+        const index = parseInt(indexStr, 10);
+        if (!variantsData[index]) {
+          variantsData[index] = {};
+        }
+        variantsData[index][field] = body[key];
+      }
+    } else {
+      try {
+        if (
+          [
+            "aboutProduct",
+            "sizes",
+            "colors",
+            "inventory",
+            "flashSale",
+            "tags",
+            "metaKeywords",
+          ].includes(key) &&
+          typeof body[key] === "string"
+        ) {
+          const parsed = JSON.parse(body[key]);
+          // Convert colors array of objects to array of JSON strings
+          if (key === "colors" && Array.isArray(parsed)) {
+            parsedData[key] = parsed.map((c) =>
+              typeof c === "object" ? JSON.stringify(c) : c
+            );
+          } else {
+            parsedData[key] = parsed;
+          }
+        } else {
+          parsedData[key] = body[key];
+        }
+      } catch (e) {
+        parsedData[key] = body[key];
+      }
+    }
+  }
+
+  // Convert boolean strings to booleans
+  const booleanFields = [
+    "isSale",
+    "isFlashSale",
+    "isNew",
+    "isActive",
+    "isFeatured",
+  ];
+  booleanFields.forEach((field) => {
+    if (parsedData[field]) {
+      parsedData[field] = parsedData[field] === "true";
+    }
+  });
+
+  // Convert numeric strings to numbers
+  const numberFields = [
+    "price",
+    "originPrice",
+    "weight",
+    "minimumOrderQty",
+    "maximumOrderQty",
+  ];
+  numberFields.forEach((field) => {
+    if (parsedData[field]) {
+      parsedData[field] = parseFloat(parsedData[field]);
+    }
+  });
+
+  // Convert ID fields to numbers
+  const idFields = ["categoryId", "typeId"];
+  idFields.forEach((field) => {
+    if (parsedData[field]) {
+      parsedData[field] = parseInt(parsedData[field], 10);
+    }
+  });
+
+  return { parsedData, variantsData };
+};
+
+// Enhanced slug generation
+const generateSlug = (name: string): string => {
+  return name
+    .toLowerCase()
+    .replace(/[^\w\s-]/g, "") // Remove special characters
+    .replace(/\s+/g, "-") // Replace spaces with hyphens
+    .replace(/-+/g, "-") // Replace multiple hyphens with single
+    .trim();
+};
+
+// Enhanced error handling wrapper
+const asyncHandler = (fn: Function) => {
+  return (req: Request, res: Response, next: NextFunction) => {
+    Promise.resolve(fn(req, res, next)).catch(next);
+  };
+};
+
 class ProductController {
   public router: Router;
 
@@ -61,31 +199,231 @@ class ProductController {
 
   private initializeRoutes(): void {
     // Public routes
-    this.router.get("/", this.getAllProducts);
-    this.router.get("/search", this.searchProducts);
-    this.router.get("/:id", this.getProduct);
-    this.router.get("/:id/reviews", this.getProductReviews);
+    this.router.get("/", asyncHandler(this.getAllProducts));
+    this.router.get("/search", asyncHandler(this.searchProducts));
+    this.router.get("/featured", asyncHandler(this.getFeaturedProducts));
+    this.router.get(
+      "/by-category/:categoryId",
+      asyncHandler(this.getProductsByCategory)
+    );
+    this.router.get("/:id", asyncHandler(this.getProduct));
+    this.router.get("/:id/reviews", asyncHandler(this.getProductReviews));
+    this.router.get("/:id/variants", asyncHandler(this.getProductVariants));
+    this.router.post(
+      "/:id/increment-views",
+      asyncHandler(this.incrementProductViews)
+    );
 
     // Protected routes - require authentication
     this.router.use(authMiddleware);
 
     // Product CRUD operations
-    this.router.post("/", uploadMiddleware, this.createProduct);
-    this.router.put("/:id", uploadMiddleware, this.updateProduct);
-    this.router.delete("/:id", this.deleteProduct);
+    this.router.post("/", uploadMiddleware, asyncHandler(this.createProduct));
+    this.router.put("/:id", uploadMiddleware, asyncHandler(this.updateProduct));
+    this.router.delete("/:id", asyncHandler(this.deleteProduct));
 
     // Product variants and inventory
-    this.router.post("/:id/variants", this.manageProductVariants);
-    this.router.post("/:id/inventory", this.manageInventory);
+    this.router.post("/:id/variants", asyncHandler(this.manageProductVariants));
+    this.router.post("/:id/inventory", asyncHandler(this.manageInventory));
 
     // Product sales and promotions
-    this.router.post("/:id/flash-sale", this.manageFlashSale);
-    this.router.put("/:id/status", this.updateProductStatus);
-    this.router.post("/:id/sales", this.updateProductSales);
-    this.router.post("/:id/reviews", this.addProductReview);
+    this.router.post("/:id/flash-sale", asyncHandler(this.manageFlashSale));
+    this.router.put("/:id/status", asyncHandler(this.updateProductStatus));
+    this.router.post("/:id/sales", asyncHandler(this.updateProductSales));
+    this.router.post("/:id/reviews", asyncHandler(this.addProductReview));
+    this.router.post(
+      "/:id/reviews/:reviewId/reply",
+      asyncHandler(this.addReplyToReview)
+    );
+
+    // Admin only routes
+    this.router.get("/admin/analytics", asyncHandler(this.getProductAnalytics));
+    this.router.post(
+      "/admin/bulk-update",
+      asyncHandler(this.bulkUpdateProducts)
+    );
   }
 
-  // Create Product - Rewritten to handle complex form data
+  // New method for getting featured products
+  public getFeaturedProducts: RequestHandler = async (req, res) => {
+    const { limit = 10 } = req.query;
+    const limitNum = Math.min(50, Math.max(1, Number(limit)));
+
+    const products = await prisma.product.findMany({
+      where: {
+        isFeatured: true,
+        isActive: true,
+      },
+      include: {
+        category: true,
+        type: true,
+        inventory: true,
+        flashSale: true,
+      },
+      take: limitNum,
+      orderBy: { createdAt: "desc" },
+    });
+
+    res.json({
+      success: true,
+      data: products,
+      total: products.length,
+    });
+  };
+
+  // New method for getting products by category
+  public getProductsByCategory: RequestHandler = async (req, res) => {
+    const { categoryId } = req.params;
+    const { page = 1, limit = 10 } = req.query;
+
+    const pageNum = Math.max(1, Number(page));
+    const limitNum = Math.min(100, Math.max(1, Number(limit)));
+
+    const [products, total] = await prisma.$transaction([
+      prisma.product.findMany({
+        where: {
+          categoryId: parseInt(categoryId, 10),
+          isActive: true,
+        },
+        include: {
+          category: true,
+          type: true,
+          inventory: true,
+          flashSale: true,
+        },
+        skip: (pageNum - 1) * limitNum,
+        take: limitNum,
+        orderBy: { createdAt: "desc" },
+      }),
+      prisma.product.count({
+        where: {
+          categoryId: parseInt(categoryId, 10),
+          isActive: true,
+        },
+      }),
+    ]);
+
+    res.json({
+      success: true,
+      data: products,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        pages: Math.ceil(total / limitNum),
+      },
+    });
+  };
+
+  // New method for incrementing product views
+  public incrementProductViews: RequestHandler = async (req, res) => {
+    const { id } = req.params;
+
+    await prisma.product.update({
+      where: { id },
+      data: {
+        views: { increment: 1 },
+      },
+    });
+
+    res.json({
+      success: true,
+      message: "Product view incremented successfully",
+    });
+  };
+
+  // New method for product analytics
+  public getProductAnalytics: RequestHandler = async (req, res) => {
+    const analytics = await prisma.$transaction([
+      // Total products
+      prisma.product.count(),
+      // Active products
+      prisma.product.count({ where: { isActive: true } }),
+      // Featured products
+      prisma.product.count({ where: { isFeatured: true } }),
+      // Products on sale
+      prisma.product.count({ where: { isSale: true } }),
+      // Low stock products
+      prisma.inventory.count({ where: { quantity: { lte: 10 } } }),
+      // Top selling products
+      prisma.product.findMany({
+        select: {
+          id: true,
+          name: true,
+          sold: true,
+          views: true,
+        },
+        orderBy: { sold: "desc" },
+        take: 10,
+      }),
+      // Recently added products
+      prisma.product.findMany({
+        select: {
+          id: true,
+          name: true,
+          createdAt: true,
+        },
+        orderBy: { createdAt: "desc" },
+        take: 10,
+      }),
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        totalProducts: analytics[0],
+        activeProducts: analytics[1],
+        featuredProducts: analytics[2],
+        saleProducts: analytics[3],
+        lowStockProducts: analytics[4],
+        topSellingProducts: analytics[5],
+        recentProducts: analytics[6],
+      },
+    });
+  };
+
+  // New method for bulk product updates
+  public bulkUpdateProducts: RequestHandler = async (req, res) => {
+    const { productIds, updateData } = req.body;
+
+    if (!Array.isArray(productIds) || productIds.length === 0) {
+      throw new ApiError(400, "Product IDs array is required");
+    }
+
+    const validUpdateFields = [
+      "isActive",
+      "isFeatured",
+      "isSale",
+      "isNew",
+      "categoryId",
+      "typeId",
+    ];
+    const filteredUpdateData = Object.keys(updateData)
+      .filter((key) => validUpdateFields.includes(key))
+      .reduce((obj, key) => {
+        obj[key] = updateData[key];
+        return obj;
+      }, {} as any);
+
+    if (Object.keys(filteredUpdateData).length === 0) {
+      throw new ApiError(400, "No valid update fields provided");
+    }
+
+    const result = await prisma.product.updateMany({
+      where: {
+        id: { in: productIds },
+      },
+      data: filteredUpdateData,
+    });
+
+    res.json({
+      success: true,
+      message: `${result.count} products updated successfully`,
+      updatedCount: result.count,
+    });
+  };
+
+  // Create Product - Enhanced version with better error handling
   private async createProductHandler(
     req: FileRequest,
     res: Response,
@@ -95,61 +433,32 @@ class ProductController {
     let allUploadedFiles: CloudinaryResponse[] = [];
 
     try {
-      // Step 1: Parse and reconstruct data from the multipart form
-      const body = req.body;
-      const parsedData: { [key: string]: any } = {};
-      const variantsData: { [key: number]: any } = {};
+      // Step 1: Parse and validate form data
+      const { parsedData, variantsData } = parseMultipartFormData(req.body);
 
-      // Parse JSON fields and separate variant fields
-      for (const key in body) {
-        if (key.startsWith("variants[")) {
-          const match = key.match(/variants\[(\d+)\]\[(\w+)\]/);
-          if (match) {
-            const [, indexStr, field] = match;
-            const index = parseInt(indexStr, 10);
-            if (!variantsData[index]) {
-              variantsData[index] = {};
-            }
-            variantsData[index][field] = body[key];
-          }
-        } else {
-          try {
-            if (
-              [
-                "aboutProduct",
-                "sizes",
-                "colors",
-                "inventory",
-                "flashSale",
-              ].includes(key) &&
-              typeof body[key] === "string"
-            ) {
-              parsedData[key] = JSON.parse(body[key]);
-            } else {
-              parsedData[key] = body[key];
-            }
-          } catch (e) {
-            parsedData[key] = body[key];
-          }
+      console.log("=== DEBUG INFO ===");
+      console.log("parsedData:", parsedData);
+      console.log("variantsData:", variantsData);
+      console.log("parsedData.variants:", parsedData.variants);
+      console.log("parsedData.typeId:", parsedData.typeId);
+      console.log("==================");
+
+      // Step 2: Validate product type if provided
+      if (parsedData.typeId) {
+        const productType = await prisma.productType.findUnique({
+          where: { id: parsedData.typeId },
+        });
+        if (!productType) {
+          throw new ApiError(404, "Product type not found");
         }
+        // Add type name for validation
+        parsedData.type = productType.name;
+      } else {
+        // Set default type if typeId not provided
+        parsedData.type = "default";
       }
 
-      // Convert boolean strings to booleans
-      if (parsedData.isSale) parsedData.isSale = parsedData.isSale === "true";
-      if (parsedData.isFlashSale)
-        parsedData.isFlashSale = parsedData.isFlashSale === "true";
-      if (parsedData.isNew) parsedData.isNew = parsedData.isNew === "true";
-
-      // Convert price fields to numbers
-      if (parsedData.price) parsedData.price = parseFloat(parsedData.price);
-      if (parsedData.originPrice)
-        parsedData.originPrice = parseFloat(parsedData.originPrice);
-
-      // Convert ID field to number
-      if (parsedData.categoryId)
-        parsedData.categoryId = parseInt(parsedData.categoryId, 10);
-
-      // Step 2: Separate files
+      // Step 3: Handle file uploads
       const imagesToUpload: Express.Multer.File[] = [];
       const thumbImageToUpload: Express.Multer.File[] = [];
       const variantImagesToUpload: { [key: string]: Express.Multer.File } = {};
@@ -171,7 +480,7 @@ class ProductController {
         );
       }
 
-      // Step 3: Upload all files
+      // Step 4: Upload all files
       const allFiles = [
         ...imagesToUpload,
         ...thumbImageToUpload,
@@ -179,23 +488,22 @@ class ProductController {
       ];
       allUploadedFiles = await handleFileUploads(allFiles, "products");
 
-      // Create a map of original fieldname to Cloudinary URL
+      // Step 5: Map URLs back to data structure
       const urlMap = new Map<string, string>();
       allUploadedFiles.forEach((uploadedFile, index) => {
         urlMap.set(allFiles[index].fieldname, uploadedFile.url);
       });
 
-      // Step 4: Map URLs back to our data structure
       const imageUrls = imagesToUpload
         .map((f) => urlMap.get(f.fieldname))
         .filter(Boolean) as string[];
       const thumbImageUrl = urlMap.get("thumbImage");
 
-      // Reconstruct variants with their image URLs
+      // Step 6: Process variants
       let variants: ProductVariantInput[] = [];
 
+      // Handle variants from variantsData (form field format)
       if (Object.keys(variantsData).length > 0) {
-        // Handle variants sent as separate form fields
         variants = Object.keys(variantsData).map((key) => {
           const index = parseInt(key, 10);
           const variant = variantsData[index];
@@ -207,12 +515,11 @@ class ProductController {
             image: variantImageUrl || "",
           };
         });
-      } else if (parsedData.variants && Array.isArray(parsedData.variants)) {
-        // Handle variants sent as an array of objects
-        console.log("Reconstructing variants from parsedData.variants array");
+      }
+      // Handle variants from parsedData.variants (JSON format)
+      else if (parsedData.variants && Array.isArray(parsedData.variants)) {
         variants = parsedData.variants.map((variant: any, index: number) => {
           const variantImageUrl = urlMap.get(`variantImage_${index}`);
-          console.log(`Mapping variant ${index} to image: ${variantImageUrl}`);
           return {
             ...variant,
             id: variant.id || undefined,
@@ -220,48 +527,70 @@ class ProductController {
             image: variantImageUrl || "",
           };
         });
-      } else {
-        console.log("No variants data found to process.");
       }
 
-      console.log("Final variants array before validation:", variants);
-
-      // --> NEW: Automatically derive colors and sizes from variants
+      // Step 7: Auto-derive colors and sizes from variants
       if (variants.length > 0) {
-        const variantColors = variants.map((v) => v.colorName).filter(Boolean);
+        const variantColors = variants
+          .map((v) => ({ name: v.colorName, code: v.colorCode }))
+          .filter((v) => v.name && v.code);
         const variantSizes = variants.map((v) => v.size).filter(Boolean);
 
-        // Use Set to remove duplicates
-        parsedData.colors = [...new Set(variantColors)];
+        const uniqueColors = Array.from(
+          new Set(variantColors.map((c) => JSON.stringify(c)))
+        ).map((s) => JSON.parse(s));
+        // Convert color objects to JSON strings for database storage
+        parsedData.colors = uniqueColors.map((c) => JSON.stringify(c));
         parsedData.sizes = [...new Set(variantSizes)];
-
-        console.log("Derived from variants:", {
-          colors: parsedData.colors,
-          sizes: parsedData.sizes,
-        });
       }
-      // <-- END NEW
 
-      // Step 5: Validate data before transaction
-      const { variants: _, ...validationData } = { ...parsedData, variants };
+      // Step 8: Generate unique SKU if not provided
+      if (!parsedData.sku) {
+        const timestamp = Date.now().toString().slice(-6);
+        const brandPrefix = parsedData.brand.substring(0, 3).toUpperCase();
+        parsedData.sku = `${brandPrefix}-${timestamp}`;
+      }
 
+      // Step 9: Generate slug
+      const baseSlug = generateSlug(parsedData.name);
+      let slug = baseSlug;
+      let counter = 1;
+
+      while (await prisma.product.findUnique({ where: { slug } })) {
+        slug = `${baseSlug}-${counter}`;
+        counter++;
+      }
+
+      // Step 10: Validate final data
+      const { variants: _, ...validationData } = {
+        ...parsedData,
+        variants,
+        type: parsedData.type || "default", // Use the type from product type lookup
+      };
       const validationError = validateProduct(validationData);
       if (validationError) {
         throw new ApiError(400, validationError);
       }
+
       for (const variant of variants) {
+        // Make sure image field exists (can be empty string)
+        if (!variant.image) {
+          variant.image = "";
+        }
         const variantError = validateVariant(variant);
         if (variantError) {
           throw new ApiError(400, `Invalid variant data: ${variantError}`);
         }
       }
 
-      // Step 6: Assemble final data and create product
+      // Step 11: Create product
       const productPayload = {
         ...parsedData,
+        slug,
         images: imageUrls,
         thumbImage: thumbImageUrl,
         variants: variants,
+        isActive: parsedData.isActive !== false, // Default to true
       };
 
       const product = await this.createProductTransaction(productPayload);
@@ -290,6 +619,7 @@ class ProductController {
       price,
       originPrice,
       typeId,
+      weight,
       gender,
       brand,
       categoryId,
@@ -304,6 +634,13 @@ class ProductController {
       variants,
     } = productPayload;
 
+    const type = await prisma.productType.findUnique({
+      where: { id: typeId },
+    });
+    if (!type) {
+      throw new ApiError(404, "Product type not found");
+    }
+
     return await prisma.$transaction(async (tx) => {
       const product = await tx.product.create({
         data: {
@@ -313,6 +650,7 @@ class ProductController {
           price: new Prisma.Decimal(price),
           originPrice: new Prisma.Decimal(originPrice),
           typeId,
+          weight,
           gender,
           brand,
           categoryId,
@@ -403,7 +741,15 @@ class ProductController {
               ].includes(key) &&
               typeof body[key] === "string"
             ) {
-              parsedData[key] = JSON.parse(body[key]);
+              const parsed = JSON.parse(body[key]);
+              // Convert colors array of objects to array of JSON strings
+              if (key === "colors" && Array.isArray(parsed)) {
+                parsedData[key] = parsed.map((c) =>
+                  typeof c === "object" ? JSON.stringify(c) : c
+                );
+              } else {
+                parsedData[key] = parsed;
+              }
             } else {
               parsedData[key] = body[key];
             }
@@ -423,6 +769,17 @@ class ProductController {
         parsedData.originPrice = parseFloat(parsedData.originPrice);
       if (parsedData.categoryId)
         parsedData.categoryId = parseInt(parsedData.categoryId, 10);
+
+      if (parsedData.typeId) {
+        parsedData.typeId = parseInt(parsedData.typeId, 10);
+        const productType = await prisma.productType.findUnique({
+          where: { id: parsedData.typeId },
+        });
+        if (!productType) {
+          throw new ApiError(404, "Product type not found");
+        }
+        parsedData.type = productType.name;
+      }
 
       // Step 3: Separate new files
       const imagesToUpload: Express.Multer.File[] = [];
@@ -567,6 +924,7 @@ class ProductController {
       price,
       originPrice,
       typeId,
+      weight,
       gender,
       brand,
       categoryId,
@@ -581,6 +939,13 @@ class ProductController {
       variants,
     } = productPayload;
 
+    const type = await prisma.productType.findUnique({
+      where: { id: typeId },
+    });
+    if (!type) {
+      throw new ApiError(404, "Product type not found");
+    }
+
     return await prisma.$transaction(async (tx) => {
       // Use a single, powerful update query with nested writes
       const updatedProduct = await tx.product.update({
@@ -594,11 +959,13 @@ class ProductController {
             ? new Prisma.Decimal(originPrice)
             : undefined,
           typeId,
+          weight,
           gender,
           brand,
           categoryId,
           sizes,
           colors,
+          type: type.name as any,
           isSale,
           isFlashSale,
           isNew,
@@ -676,6 +1043,7 @@ class ProductController {
         where: { id },
         include: {
           category: true,
+          type: true,
           variants: true,
           inventory: true,
           reviews: {
@@ -758,6 +1126,7 @@ class ProductController {
           where,
           include: {
             category: true,
+            type: true,
             inventory: true,
             flashSale: true,
           },
@@ -1322,6 +1691,5 @@ class ProductController {
     }
   };
 }
-
 
 export const productController = new ProductController();

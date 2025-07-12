@@ -98,6 +98,7 @@ enum PaymentMethod {
   PAYPAL
   STRIPE
   BANK_TRANSFER
+  GOOGLE_PAY
 }
 
 enum ReportType {
@@ -285,13 +286,25 @@ model Product {
   isNew             Boolean          @default(false) // هل المنتج جديد؟
   isWishlist        Boolean?         @default(false) // هل المنتج في المفضلة؟
   isCompare         Boolean?         @default(false) // هل المنتج في المقارنة؟
+  isActive          Boolean          @default(true) // هل المنتج متاح للعرض؟
+  isFeatured        Boolean          @default(false) // هل المنتج مميز؟
   rate              Float            @default(0) // متوسط تقييم المنتج
   sold              Int              @default(0) // عدد القطع المباعة
   quantityPurchase  Int              @default(0) // عدد مرات الشراء
+  views             Int              @default(0) // عدد المشاهدات
   action            String? // إجراء خاص بالمنتج (اختياري)
   weight            Decimal? // الوزن المحدد للمنتج
+  dimensions        String? // الأبعاد (طول × عرض × ارتفاع)
   sizes             String[] // حجم المنتج
   colors            String[] // لون المنتج
+  tags              String[] // الكلمات المفتاحية للمنتج
+  sku               String?          @unique // رمز المنتج الفريد
+  barcode           String? // الباركود
+  minimumOrderQty   Int              @default(1) // الحد الأدنى لكمية الطلب
+  maximumOrderQty   Int? // الحد الأقصى لكمية الطلب
+  metaTitle         String? // عنوان SEO
+  metaDescription   String? // وصف SEO
+  metaKeywords      String[] // كلمات مفتاحية SEO
   createdAt         DateTime         @default(now()) // تاريخ إضافة المنتج
   updatedAt         DateTime         @updatedAt // تاريخ آخر تحديث للمنتج
   category          Category         @relation(fields: [categoryId], references: [id]) // علاقة مع الفئة
@@ -305,6 +318,19 @@ model Product {
   wishlists         Wishlist[]
   compares          Compare[]
   excludedByCoupons Coupon[]         @relation("ExcludedProducts")
+
+  // فهارس لتحسين الأداء
+  @@index([categoryId])
+  @@index([typeId])
+  @@index([brand])
+  @@index([isSale])
+  @@index([isNew])
+  @@index([isActive])
+  @@index([isFeatured])
+  @@index([createdAt])
+  @@index([sold])
+  @@index([rate])
+  @@index([views])
 }
 
 // --- Inventory Model ---
@@ -544,9 +570,10 @@ model Order {
   updatedAt  DateTime @updatedAt
 
   // Relations
-  shipment Shipment[]
-  refund   Refund[]
-  Payment  Payment[]
+  shipment       Shipment[]
+  refund         Refund[]
+  Payment        Payment[]
+  PaymentSession PaymentSession?
 }
 
 model OrderItem {
@@ -569,6 +596,28 @@ model OrderItem {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// --- Payment Session Model ---
+model PaymentSession {
+  id             String        @id @default(uuid())
+  orderId        String        @unique
+  paymentMethod  PaymentMethod
+  amount         Decimal       @db.Decimal(12, 2)
+  currency       String        @default("USD")
+  status         PaymentStatus @default(PENDING)
+  sessionId      String? // Stripe Session ID
+  paypalOrderId  String? // PayPal Order ID
+  googlePayToken String? // Google Pay Token
+  clientSecret   String? // Stripe Client Secret
+  metadata       Json?         @db.Json // Additional payment metadata
+  expiresAt      DateTime
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  order Order @relation(fields: [orderId], references: [id])
+
+  @@index([orderId, status])
 }
 
 // --- Payment Model ---

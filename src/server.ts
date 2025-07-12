@@ -16,6 +16,7 @@ import cartRoute from "./routes/cartRoute";
 import wishlistRoute from "./routes/wishlistRoute";
 import compareRoute from "./routes/compareRoute";
 import orderRoute from "./routes/orderRoute";
+import paymentRoute from "./routes/paymentRoutes";
 
 dotenv.config();
 
@@ -48,6 +49,7 @@ app.use("/api/cart", cartRoute);
 app.use("/api/wishlist", wishlistRoute);
 app.use("/api/compare", compareRoute);
 app.use("/api/orders", orderRoute);
+app.use("/api/payment", paymentRoute);
 
 app.get("/", (req, res) => {
   res.send("Hello from E-commerce API");

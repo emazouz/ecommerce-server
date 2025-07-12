@@ -110,7 +110,7 @@ export const register = async (req: Request, res: Response): Promise<void> => {
         email,
         password: hashedPassword,
         username,
-        role: "USER",
+        role: "ADMIN",
         termsAgreed: true,
       },
     });

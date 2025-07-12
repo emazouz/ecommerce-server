@@ -187,7 +187,7 @@ export const createCoupon = async (
         },
       },
     });
-    console.log("3"); 
+    console.log("3");
     res.status(201).json({
       success: true,
       message: "Coupon created successfully!",

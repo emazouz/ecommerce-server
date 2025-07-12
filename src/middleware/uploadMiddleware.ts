@@ -18,7 +18,7 @@ const fileFilter = (
 const upload = multer({
   storage,
   limits: {
-    fileSize: 15 * 1024 * 1024, // 15 MB
+    fileSize: 10 * 1024 * 1024, // 10 MB
   },
   fileFilter: (req, file, cb) => {
     // Allow all file types for now, you might want to restrict this

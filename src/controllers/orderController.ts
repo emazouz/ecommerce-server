@@ -2,6 +2,7 @@ import { prisma } from "../utils/prisma";
 import { Request, Response } from "express";
 import { AuthenticatedRequest } from "../middleware/authMiddleware";
 import { Decimal } from "@prisma/client/runtime/library";
+import { NotificationHelpers } from "../utils/notificationHelpers";
 
 // --- Helper Functions ---
 
@@ -51,126 +52,63 @@ const validateShippingAddress = (shippingAddress: any): any => {
       country: "",
     };
   }
-
-  if (typeof shippingAddress === "object" && shippingAddress !== null) {
-    return {
-      address: shippingAddress.address || shippingAddress.addressLineOne || "",
-      city: shippingAddress.city || "",
-      postalCode: shippingAddress.postalCode || shippingAddress.zipCode || "",
-      country: shippingAddress.country || "",
-    };
-  }
-
-  return {
-    address: "",
-    city: "",
-    postalCode: "",
-    country: "",
-  };
+  return shippingAddress;
 };
 
-// --- Controller Functions ---
+// --- Controllers ---
 
 /**
- * @desc    Create a new order
- * @route   POST /api/orders
- * @access  Private
+ * Create a new order
  */
 export const createOrder = async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user?.userId;
-    const { shippingAddress, paymentMethod, couponCode, notes, adminNotes } =
-      req.body;
+    const { shippingAddress, paymentMethod } = req.body;
 
     if (!userId) {
-      return res
-        .status(401)
-        .json({ success: false, message: "User not authenticated" });
+      return res.status(401).json({
+        success: false,
+        message: "User not authenticated",
+      });
     }
 
-    if (!paymentMethod) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Payment method is required" });
-    }
-
-    // Get user's active cart
-    const cart = await prisma.cart.findFirst({
-      where: { userId, status: "ACTIVE" },
-      include: {
-        cartItems: {
-          include: {
-            product: true,
-            variant: true,
-          },
-        },
-        coupon: true,
-      },
-    });
-
-    if (!cart || cart.cartItems.length === 0) {
+    // Validate required fields
+    if (!shippingAddress || !paymentMethod) {
       return res.status(400).json({
         success: false,
-        message: "Cart is empty or not found",
+        message: "Missing required fields",
       });
     }
 
-    // Validate shipping address
-    let finalShippingAddress = shippingAddress;
-    if (!finalShippingAddress) {
-      // Get user's default address
-      const userAddress = await prisma.address.findFirst({
-        where: { userId, isDefault: true },
-      });
-
-      if (!userAddress) {
-        return res.status(400).json({
-          success: false,
-          message: "Shipping address is required",
-        });
-      }
-
-      finalShippingAddress = {
-        address: userAddress.addressLineOne || "",
-        city: userAddress.city || "",
-        postalCode: userAddress.zipCode || "",
-        country: userAddress.country || "",
-      };
-    }
-
-    // Validate and format shipping address
-    const formattedShippingAddress =
-      validateShippingAddress(finalShippingAddress);
-
-    // Validate coupon if provided
-    let couponId: string | undefined = undefined;
-    if (couponCode) {
-      const coupon = await prisma.coupon.findUnique({
-        where: { code: couponCode },
-      });
-
-      if (!coupon || !coupon.isActive || coupon.endDate < new Date()) {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid or expired coupon",
-        });
-      }
-
-      couponId = coupon.id;
-    }
-
-    // Calculate order totals
-    const totals = calculateOrderTotals(cart);
-
-    // Create order in transaction
+    // Start transaction
     const order = await prisma.$transaction(async (tx) => {
-      // Generate unique order number
-      const orderNumber = generateOrderNumber();
+      // Get user's active cart
+      const cart = await tx.cart.findFirst({
+        where: { userId, status: "ACTIVE" },
+        include: {
+          cartItems: {
+            include: {
+              product: true,
+            },
+          },
+          coupon: true,
+        },
+      });
 
-      // Create the order
+      if (!cart || cart.cartItems.length === 0) {
+        throw new Error("No active cart found or cart is empty");
+      }
+
+      // Calculate order totals
+      const totals = calculateOrderTotals(cart);
+
+      // Validate shipping address
+      const validatedShippingAddress = validateShippingAddress(shippingAddress);
+
+      // Create order
       const newOrder = await tx.order.create({
         data: {
-          orderNumber,
+          orderNumber: generateOrderNumber(),
           userId,
           itemsPrice: totals.itemsPrice,
           shippingPrice: totals.shippingPrice,
@@ -178,15 +116,9 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response) => {
           discountAmount: totals.discountAmount,
           totalAmount: totals.totalAmount,
           paymentMethod,
-          paymentStatus: "PENDING",
-          shippingAddress: formattedShippingAddress,
-          shippingMethod: cart.shippingMethod || "STANDARD",
-          shippingStatus: "PENDING",
-          orderStatus: "PENDING",
-          couponId,
-          couponCode: couponCode || null,
-          notes: notes || null,
-          adminNotes: adminNotes || null,
+          shippingAddress: validatedShippingAddress,
+          couponId: cart.couponId,
+          couponCode: cart.coupon?.code || null,
           orderItems: {
             create: cart.cartItems.map((item) => ({
               productId: item.productId,
@@ -195,10 +127,10 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response) => {
               image: item.productImage || item.product.thumbImage,
               price: item.price,
               quantity: item.quantity,
-              color: item.color || "",
-              size: item.size || "",
-              weight: item.weight || null,
-              sku: item.sku || `${item.productId}-${item.variantId}`,
+              color: item.color,
+              size: item.size,
+              weight: item.weight,
+              sku: item.sku,
             })),
           },
         },
@@ -208,80 +140,42 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response) => {
               product: true,
             },
           },
-          coupon: true,
         },
       });
 
-      // Update product stock and sales data
-      for (const item of cart.cartItems) {
-        if (item.variantId) {
-          await tx.productVariant.update({
-            where: { id: item.variantId },
-            data: { quantity: { decrement: item.quantity } },
-          });
-        }
-
-        await tx.product.update({
-          where: { id: item.productId },
-          data: {
-            sold: { increment: item.quantity },
-            quantityPurchase: { increment: 1 },
-          },
-        });
-
-        // Update inventory if exists
-        const inventory = await tx.inventory.findUnique({
-          where: { productId: item.productId },
-        });
-
-        if (inventory) {
-          await tx.inventory.update({
-            where: { productId: item.productId },
-            data: { quantity: { decrement: item.quantity } },
-          });
-        }
-      }
-
-      // Update coupon usage count
-      if (couponId) {
-        await tx.coupon.update({
-          where: { id: couponId },
-          data: { usedCount: { increment: 1 } },
-        });
-      }
-
-      // Clear cart items and update cart status
-      await tx.cartItem.deleteMany({
-        where: { cartId: cart.id },
-      });
-
+      // Update cart status to PAID
       await tx.cart.update({
         where: { id: cart.id },
-        data: {
-          status: "PENDING", // Mark as pending/converted
-          totalItems: 0,
-          subtotal: new Decimal(0),
-          taxAmount: new Decimal(0),
-          shippingAmount: new Decimal(0),
-          total: new Decimal(0),
-          discountAmount: new Decimal(0),
-          couponId: null,
-        },
+        data: { status: "PAID" },
       });
+
+      // Send order confirmation notification
+      try {
+        await NotificationHelpers.notifyOrderConfirmed(
+          userId,
+          newOrder.orderNumber
+        );
+      } catch (notificationError) {
+        console.error(
+          "Failed to send order confirmation notification:",
+          notificationError
+        );
+        // Don't fail the order creation if notification fails
+      }
 
       return newOrder;
     });
 
     res.status(201).json({
       success: true,
-      message: "Order created successfully",
       data: order,
+      message: "Order created successfully",
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error("Error creating order:", error);
     res.status(500).json({
       success: false,
-      message: error.message || "An unexpected error occurred",
+      message: error instanceof Error ? error.message : "Internal server error",
     });
   }
 };
@@ -472,9 +366,7 @@ export const getOrderById = async (
 };
 
 /**
- * @desc    Update order status
- * @route   PUT /api/orders/:id/status
- * @access  Private (Admin only)
+ * Update order status
  */
 export const updateOrderStatus = async (
   req: AuthenticatedRequest,
@@ -482,46 +374,44 @@ export const updateOrderStatus = async (
 ) => {
   try {
     const { id } = req.params;
-    const { orderStatus, shippingStatus, paymentStatus, adminNotes } = req.body;
-    const userId = req.user?.userId;
+    const { orderStatus, trackingNumber } = req.body;
 
-    if (!userId) {
-      return res
-        .status(401)
-        .json({ success: false, message: "User not authenticated" });
+    if (!orderStatus) {
+      return res.status(400).json({
+        success: false,
+        message: "Order status is required",
+      });
     }
 
-    // Check if user is admin
-    if (req.user?.role !== "ADMIN") {
-      return res
-        .status(403)
-        .json({ success: false, message: "Access denied. Admin only." });
+    // Validate order status
+    const validStatuses = [
+      "PENDING",
+      "CONFIRMED",
+      "SHIPPED",
+      "DELIVERED",
+      "CANCELLED",
+    ];
+    if (!validStatuses.includes(orderStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid order status",
+      });
     }
 
-    const order = await prisma.order.findUnique({
-      where: { id },
-      include: { orderItems: true },
-    });
+    // Update order with tracking number if provided
+    const updateData: any = {
+      orderStatus,
+      updatedAt: new Date(),
+    };
 
-    if (!order) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Order not found" });
+    if (trackingNumber) {
+      updateData.trackingNumber = trackingNumber;
     }
 
-    // Prepare update data
-    const updateData: any = {};
-    if (orderStatus !== undefined) {
-      updateData.orderStatus = orderStatus;
-      if (orderStatus === "DELIVERED") {
-        updateData.isDelivered = true;
-        updateData.deliveredAt = new Date();
-      }
+    if (orderStatus === "DELIVERED") {
+      updateData.isDelivered = true;
+      updateData.deliveredAt = new Date();
     }
-    if (shippingStatus !== undefined)
-      updateData.shippingStatus = shippingStatus;
-    if (paymentStatus !== undefined) updateData.paymentStatus = paymentStatus;
-    if (adminNotes !== undefined) updateData.adminNotes = adminNotes;
 
     const updatedOrder = await prisma.order.update({
       where: { id },
@@ -535,16 +425,47 @@ export const updateOrderStatus = async (
       },
     });
 
+    // Send status update notifications
+    try {
+      switch (orderStatus) {
+        case "CONFIRMED":
+          await NotificationHelpers.notifyOrderConfirmed(
+            updatedOrder.userId,
+            updatedOrder.orderNumber
+          );
+          break;
+        case "SHIPPED":
+          await NotificationHelpers.notifyOrderShipped(
+            updatedOrder.userId,
+            updatedOrder.orderNumber,
+            trackingNumber || "N/A"
+          );
+          break;
+        case "DELIVERED":
+          await NotificationHelpers.notifyOrderDelivered(
+            updatedOrder.userId,
+            updatedOrder.orderNumber
+          );
+          break;
+      }
+    } catch (notificationError) {
+      console.error(
+        "Failed to send order status notification:",
+        notificationError
+      );
+      // Don't fail the status update if notification fails
+    }
+
     res.status(200).json({
       success: true,
-      message: "Order status updated successfully",
       data: updatedOrder,
+      message: "Order status updated successfully",
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error("Error updating order status:", error);
     res.status(500).json({
       success: false,
-      message: "An unexpected error occurred",
+      message: error instanceof Error ? error.message : "Internal server error",
     });
   }
 };

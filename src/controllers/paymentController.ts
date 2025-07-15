@@ -1,6 +1,9 @@
 import { Request, Response } from "express";
 import { PaymentService } from "../services/paymentService";
-import { ApiError } from "../utils/ApiError";
+import { diagnosePayPalIssues } from "../utils/paypalDebug";
+import { PrismaClient } from "@prisma/client";
+
+const prisma = new PrismaClient();
 
 // Interface for authenticated requests
 interface AuthenticatedRequest extends Request {
@@ -15,6 +18,37 @@ export class PaymentController {
   // ===========================================
   // PayPal Payment Methods
   // ===========================================
+
+  /**
+   * Test PayPal Configuration
+   * @route GET /api/payment/paypal/test
+   * @access Public (for debugging)
+   */
+  static async testPayPalConfiguration(req: Request, res: Response) {
+    try {
+      const debugInfo = diagnosePayPalIssues();
+
+      res.status(200).json({
+        success: true,
+        message: "PayPal configuration test",
+        data: {
+          hasCredentials: debugInfo.hasCredentials,
+          baseUrl: debugInfo.baseUrl,
+          clientIdLength: debugInfo.clientIdLength,
+          clientSecretLength: debugInfo.clientSecretLength,
+          missingEnvVars: debugInfo.missingEnvVars,
+          suggestions: debugInfo.suggestions,
+        },
+      });
+    } catch (error: any) {
+      console.error("PayPal test error:", error);
+      res.status(500).json({
+        success: false,
+        message: "PayPal test failed",
+        error: error.message,
+      });
+    }
+  }
 
   /**
    * Create PayPal Order
@@ -46,6 +80,13 @@ export class PaymentController {
           message: "Order ID is required",
         });
       }
+
+      console.log("Creating PayPal order:", {
+        amount,
+        currency,
+        orderId,
+        userId,
+      });
 
       const paypalOrder = await PaymentService.createPayPalOrder(
         amount,
@@ -223,6 +264,67 @@ export class PaymentController {
   // ===========================================
 
   /**
+   * Create Google Pay Session
+   * @route POST /api/payment/google-pay/session
+   * @access Private
+   */
+  static async createGooglePaySession(
+    req: AuthenticatedRequest,
+    res: Response
+  ) {
+    try {
+      const { amount, currency = "USD", orderId, paymentMethod } = req.body;
+      const userId = req.user?.userId;
+
+      console.log("=== createGooglePaySession Controller ===");
+      console.log("User ID:", userId);
+      console.log("Amount:", amount);
+      console.log("Currency:", currency);
+      console.log("Order ID:", orderId);
+      console.log("Payment Method:", paymentMethod);
+
+      if (!userId) {
+        return res.status(401).json({
+          success: false,
+          message: "User not authenticated",
+        });
+      }
+
+      if (!amount || amount <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Valid amount is required",
+        });
+      }
+
+      if (!orderId) {
+        return res.status(400).json({
+          success: false,
+          message: "Order ID is required",
+        });
+      }
+
+      const sessionData = await PaymentService.createGooglePaySession(
+        amount,
+        currency,
+        orderId
+      );
+
+      res.status(201).json({
+        success: true,
+        message: "Google Pay session created successfully",
+        data: sessionData,
+      });
+    } catch (error: any) {
+      console.error("Google Pay session creation error:", error);
+      res.status(error.statusCode || 500).json({
+        success: false,
+        message: error.message || "Failed to create Google Pay session",
+      });
+    }
+  }
+
+  /**
    * Process Google Pay Payment
    * @route POST /api/payment/google-pay/process
    * @access Private
@@ -232,8 +334,31 @@ export class PaymentController {
     res: Response
   ) {
     try {
+      console.log("=== Google Pay Payment Processing ===");
+      console.log("Raw request body:", req.body);
+      console.log("Request body type:", typeof req.body);
+      console.log(
+        "Request body keys:",
+        req.body ? Object.keys(req.body) : "none"
+      );
+      console.log(
+        "Request body JSON string:",
+        JSON.stringify(req.body, null, 2)
+      );
+
       const { paymentData, amount, orderId } = req.body;
       const userId = req.user?.userId;
+
+      console.log("User ID:", userId);
+      console.log("Order ID:", orderId);
+      console.log("Amount:", amount);
+      console.log("Payment data received:", !!paymentData);
+      console.log("Payment data type:", typeof paymentData);
+      console.log(
+        "Payment data keys:",
+        paymentData ? Object.keys(paymentData) : "none"
+      );
+      console.log("Payment data JSON:", JSON.stringify(paymentData, null, 2));
 
       if (!userId) {
         return res.status(401).json({
@@ -243,6 +368,11 @@ export class PaymentController {
       }
 
       if (!paymentData || !amount || !orderId) {
+        console.log("❌ Missing required fields:");
+        console.log("- paymentData:", !!paymentData);
+        console.log("- amount:", !!amount);
+        console.log("- orderId:", !!orderId);
+
         return res.status(400).json({
           success: false,
           message: "Payment data, amount, and order ID are required",
@@ -256,11 +386,27 @@ export class PaymentController {
         });
       }
 
+      // Validate payment data structure
+      if (
+        !paymentData.paymentMethodData ||
+        !paymentData.paymentMethodData.tokenizationData
+      ) {
+        console.log("❌ Invalid payment data structure");
+        return res.status(400).json({
+          success: false,
+          message: "Invalid Google Pay payment data structure",
+        });
+      }
+
+      console.log("✅ Validation passed, processing payment...");
+
       const paymentResult = await PaymentService.processGooglePayPayment(
         paymentData,
         amount,
         orderId
       );
+
+      console.log("✅ Payment processed successfully:", paymentResult.id);
 
       res.status(200).json({
         success: true,
@@ -375,6 +521,93 @@ export class PaymentController {
       res.status(error.statusCode || 500).json({
         success: false,
         message: error.message || "Failed to confirm COD payment",
+      });
+    }
+  }
+
+  /**
+   * Confirm COD Order by Customer
+   * @route POST /api/payment/cod/customer-confirm
+   * @access Private (Customer only)
+   */
+  static async confirmCODOrderByCustomer(
+    req: AuthenticatedRequest,
+    res: Response
+  ) {
+    try {
+      const { orderId } = req.body;
+      const userId = req.user?.userId;
+
+      if (!userId) {
+        return res.status(401).json({
+          success: false,
+          message: "User not authenticated",
+        });
+      }
+
+      if (!orderId) {
+        return res.status(400).json({
+          success: false,
+          message: "Order ID is required",
+        });
+      }
+
+      // Verify that the order belongs to this user
+      const order = await prisma.order.findFirst({
+        where: {
+          id: orderId,
+          userId: userId,
+        },
+      });
+
+      if (!order) {
+        return res.status(404).json({
+          success: false,
+          message: "Order not found or you don't have permission to access it",
+        });
+      }
+
+      // Update payment session to COMPLETED
+      await prisma.paymentSession.updateMany({
+        where: {
+          orderId: orderId,
+          paymentMethod: "COD",
+        },
+        data: {
+          status: "COMPLETED",
+          metadata: {
+            confirmedByCustomer: true,
+            confirmedAt: new Date().toISOString(),
+            customerConfirmation: true,
+          },
+        },
+      });
+
+      // Update order status
+      await prisma.order.update({
+        where: { id: orderId },
+        data: {
+          paymentStatus: "PENDING", // Still pending until delivered
+          orderStatus: "CONFIRMED",
+        },
+      });
+
+      res.status(200).json({
+        success: true,
+        message: "COD order confirmed successfully",
+        data: {
+          orderId,
+          status: "CONFIRMED",
+          paymentMethod: "COD",
+          message:
+            "Your order has been confirmed. You will pay when the order is delivered.",
+        },
+      });
+    } catch (error: any) {
+      console.error("COD customer confirmation error:", error);
+      res.status(error.statusCode || 500).json({
+        success: false,
+        message: error.message || "Failed to confirm COD order",
       });
     }
   }
@@ -560,43 +793,22 @@ export class PaymentController {
   }
 
   // ===========================================
-  // Webhook Handlers
+  // Webhook Handlers (DISABLED FOR TESTING)
   // ===========================================
 
   /**
-   * Handle Stripe Webhook
+   * Handle Stripe Webhook - DISABLED FOR TESTING
    * @route POST /api/payment/webhook/stripe
    * @access Public (but verified)
    */
   static async handleStripeWebhook(req: Request, res: Response) {
     try {
-      const sig = req.headers["stripe-signature"] as string;
-      const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
-
-      if (!endpointSecret) {
-        throw new Error("Stripe webhook secret not configured");
-      }
-
-      // Verify webhook signature would go here
-      // const event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
-
-      // For now, we'll handle the event type directly
-      const event = req.body;
-
-      switch (event.type) {
-        case "payment_intent.succeeded":
-          console.log("Payment succeeded:", event.data.object.id);
-          // Update payment status in database
-          break;
-        case "payment_intent.payment_failed":
-          console.log("Payment failed:", event.data.object.id);
-          // Update payment status in database
-          break;
-        default:
-          console.log(`Unhandled event type: ${event.type}`);
-      }
-
-      res.status(200).json({ received: true });
+      // DISABLED FOR TESTING - Just return success
+      console.log("Stripe webhook received (disabled for testing)");
+      res.status(200).json({
+        received: true,
+        message: "Webhook disabled for testing",
+      });
     } catch (error: any) {
       console.error("Stripe webhook error:", error);
       res.status(400).json({
@@ -607,28 +819,18 @@ export class PaymentController {
   }
 
   /**
-   * Handle PayPal Webhook
+   * Handle PayPal Webhook - DISABLED FOR TESTING
    * @route POST /api/payment/webhook/paypal
    * @access Public (but verified)
    */
   static async handlePayPalWebhook(req: Request, res: Response) {
     try {
-      const event = req.body;
-
-      switch (event.event_type) {
-        case "PAYMENT.CAPTURE.COMPLETED":
-          console.log("PayPal payment completed:", event.resource.id);
-          // Update payment status in database
-          break;
-        case "PAYMENT.CAPTURE.DENIED":
-          console.log("PayPal payment denied:", event.resource.id);
-          // Update payment status in database
-          break;
-        default:
-          console.log(`Unhandled PayPal event type: ${event.event_type}`);
-      }
-
-      res.status(200).json({ received: true });
+      // DISABLED FOR TESTING - Just return success
+      console.log("PayPal webhook received (disabled for testing)");
+      res.status(200).json({
+        received: true,
+        message: "Webhook disabled for testing",
+      });
     } catch (error: any) {
       console.error("PayPal webhook error:", error);
       res.status(400).json({

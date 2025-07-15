@@ -8,7 +8,7 @@ const router = Router();
 // Rate limiting for payment endpoints
 const paymentRateLimit = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10, // limit each IP to 10 payment requests per windowMs
+  max: 100, // limit each IP to 10 payment requests per windowMs
   message: {
     success: false,
     message: "Too many payment attempts, please try again later",
@@ -32,6 +32,13 @@ const strictRateLimit = rateLimit({
 // ===========================================
 // PayPal Routes
 // ===========================================
+
+/**
+ * @route   GET /api/payment/paypal/test
+ * @desc    Test PayPal configuration
+ * @access  Public (for debugging)
+ */
+router.get("/paypal/test", PaymentController.testPayPalConfiguration);
 
 /**
  * @route   POST /api/payment/paypal/create-order
@@ -90,6 +97,18 @@ router.post(
 // ===========================================
 
 /**
+ * @route   POST /api/payment/google-pay/session
+ * @desc    Create Google Pay session
+ * @access  Private
+ */
+router.post(
+  "/google-pay/session",
+  paymentRateLimit,
+  authenticateJwt,
+  PaymentController.createGooglePaySession
+);
+
+/**
  * @route   POST /api/payment/google-pay/process
  * @desc    Process Google Pay payment
  * @access  Private
@@ -127,6 +146,17 @@ router.post(
   strictRateLimit,
   authenticateJwt,
   PaymentController.confirmCODPayment
+);
+
+/**
+ * @route   POST /api/payment/cod/customer-confirm
+ * @desc    Confirm COD order by customer
+ * @access  Private (Customer)
+ */
+router.post(
+  "/cod/customer-confirm",
+  authenticateJwt,
+  PaymentController.confirmCODOrderByCustomer
 );
 
 // ===========================================
@@ -169,21 +199,21 @@ router.post(
 );
 
 // ===========================================
-// Webhook Routes (No authentication required)
+// Webhook Routes (DISABLED FOR TESTING)
 // ===========================================
 
 /**
  * @route   POST /api/payment/webhook/stripe
- * @desc    Handle Stripe webhooks
+ * @desc    Handle Stripe webhooks - DISABLED FOR TESTING
  * @access  Public (but verified)
  */
-router.post("/webhook/stripe", PaymentController.handleStripeWebhook);
+// router.post("/webhook/stripe", PaymentController.handleStripeWebhook);
 
 /**
  * @route   POST /api/payment/webhook/paypal
- * @desc    Handle PayPal webhooks
+ * @desc    Handle PayPal webhooks - DISABLED FOR TESTING
  * @access  Public (but verified)
  */
-router.post("/webhook/paypal", PaymentController.handlePayPalWebhook);
+// router.post("/webhook/paypal", PaymentController.handlePayPalWebhook);
 
 export default router;

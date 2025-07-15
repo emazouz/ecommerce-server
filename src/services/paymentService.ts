@@ -2,6 +2,7 @@ import { PrismaClient } from "@prisma/client";
 import fetch from "node-fetch";
 import Stripe from "stripe";
 import { ApiError } from "../utils/ApiError";
+import { logPayPalDebugInfo } from "../utils/paypalDebug";
 
 const prisma = new PrismaClient();
 
@@ -21,14 +22,23 @@ export class PaymentService {
    */
   private static async generatePayPalAccessToken(): Promise<string> {
     try {
+      // Log debug info on first call
+      if (process.env.NODE_ENV === "development") {
+        logPayPalDebugInfo();
+      }
+
       const baseUrl =
         process.env.PAYPAL_BASE_URL || "https://api-m.sandbox.paypal.com";
       const clientId = process.env.PAYPAL_CLIENT_ID;
       const clientSecret = process.env.PAYPAL_CLIENT_SECRET;
 
       if (!clientId || !clientSecret) {
-        throw new Error("PayPal credentials not configured");
+        throw new Error(
+          "PayPal credentials not configured - PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET must be set"
+        );
       }
+
+      console.log("Generating PayPal access token...");
 
       const response = await fetch(`${baseUrl}/v1/oauth2/token`, {
         method: "POST",
@@ -42,12 +52,41 @@ export class PaymentService {
       });
 
       if (!response.ok) {
-        throw new Error(`PayPal authentication failed: ${response.statusText}`);
+        const errorBody = await response.text();
+        console.error("PayPal Authentication Error:", {
+          status: response.status,
+          statusText: response.statusText,
+          body: errorBody,
+        });
+
+        let errorMessage = `PayPal authentication failed: ${response.statusText}`;
+
+        try {
+          const errorData = JSON.parse(errorBody);
+          if (errorData.error_description) {
+            errorMessage += ` - ${errorData.error_description}`;
+          }
+        } catch (parseError) {
+          if (errorBody) {
+            errorMessage += ` - ${errorBody}`;
+          }
+        }
+
+        throw new Error(errorMessage);
       }
 
       const data = (await response.json()) as { access_token: string };
+
+      if (!data.access_token) {
+        throw new Error(
+          "PayPal authentication failed: No access token received"
+        );
+      }
+
+      console.log("PayPal access token generated successfully");
       return data.access_token;
     } catch (error) {
+      console.error("PayPal authentication error:", error);
       throw new ApiError(
         500,
         `PayPal authentication error: ${
@@ -70,9 +109,59 @@ export class PaymentService {
     orderId: string
   ): Promise<any> {
     try {
-      const accessToken = await this.generatePayPalAccessToken();
+      // Validate input parameters
+      if (!amount || amount <= 0) {
+        throw new Error("Invalid amount: must be greater than 0");
+      }
+
+      if (!orderId || orderId.trim() === "") {
+        throw new Error("Invalid order ID: order ID is required");
+      }
+
+      // Validate currency code
+      const supportedCurrencies = ["USD", "EUR", "GBP", "CAD", "AUD", "JPY"];
+      if (!supportedCurrencies.includes(currency)) {
+        throw new Error(`Unsupported currency: ${currency}`);
+      }
+
+      // Check required environment variables
+      const clientId = process.env.PAYPAL_CLIENT_ID;
+      const clientSecret = process.env.PAYPAL_CLIENT_SECRET;
       const baseUrl =
         process.env.PAYPAL_BASE_URL || "https://api-m.sandbox.paypal.com";
+      const clientUrl = process.env.CLIENT_URL || "http://localhost:3000";
+
+      if (!clientId || !clientSecret) {
+        throw new Error("PayPal credentials not configured properly");
+      }
+
+      const accessToken = await this.generatePayPalAccessToken();
+
+      const orderData = {
+        intent: "CAPTURE",
+        purchase_units: [
+          {
+            reference_id: orderId,
+            amount: {
+              currency_code: currency,
+              value: Number(amount).toFixed(2),
+            },
+            description: `Order ${orderId}`,
+          },
+        ],
+        application_context: {
+          brand_name: process.env.COMPANY_NAME || "Your Store",
+          landing_page: "NO_PREFERENCE",
+          user_action: "PAY_NOW",
+          return_url: `${clientUrl}/order-confirmation/${orderId}`,
+          cancel_url: `${clientUrl}/checkout`,
+        },
+      };
+
+      console.log(
+        "Creating PayPal order with data:",
+        JSON.stringify(orderData, null, 2)
+      );
 
       const response = await fetch(`${baseUrl}/v2/checkout/orders`, {
         method: "POST",
@@ -80,40 +169,55 @@ export class PaymentService {
           "Content-Type": "application/json",
           Authorization: `Bearer ${accessToken}`,
         },
-        body: JSON.stringify({
-          intent: "CAPTURE",
-          purchase_units: [
-            {
-              reference_id: orderId,
-              amount: {
-                currency_code: currency,
-                value: amount.toFixed(2),
-              },
-              description: `Order ${orderId}`,
-            },
-          ],
-          application_context: {
-            brand_name: process.env.COMPANY_NAME || "Your Store",
-            landing_page: "NO_PREFERENCE",
-            user_action: "PAY_NOW",
-            return_url: `${process.env.CLIENT_URL}/order-confirmation/${orderId}`,
-            cancel_url: `${process.env.CLIENT_URL}/checkout`,
-          },
-        }),
+        body: JSON.stringify(orderData),
       });
 
       if (!response.ok) {
-        throw new Error(`PayPal order creation failed: ${response.statusText}`);
+        const errorBody = await response.text();
+        console.error("PayPal API Error Response:", {
+          status: response.status,
+          statusText: response.statusText,
+          body: errorBody,
+        });
+
+        let errorMessage = `PayPal order creation failed: ${response.statusText}`;
+
+        try {
+          const errorData = JSON.parse(errorBody);
+          if (errorData.details && errorData.details.length > 0) {
+            errorMessage += ` - ${errorData.details[0].description}`;
+          }
+        } catch (parseError) {
+          // If we can't parse the error, use the raw body
+          if (errorBody) {
+            errorMessage += ` - ${errorBody}`;
+          }
+        }
+
+        throw new Error(errorMessage);
       }
 
       const paypalOrder = (await response.json()) as {
         id: string;
         status: string;
+        links?: any[];
       };
 
-      // Store payment session
-      await prisma.paymentSession.create({
-        data: {
+      console.log("PayPal order created successfully:", paypalOrder);
+
+      // Store payment session (upsert to handle existing sessions)
+      await prisma.paymentSession.upsert({
+        where: { orderId },
+        update: {
+          paymentMethod: "PAYPAL",
+          amount,
+          currency,
+          status: "PENDING",
+          paypalOrderId: paypalOrder.id,
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
+          metadata: JSON.parse(JSON.stringify(paypalOrder)),
+        },
+        create: {
           orderId,
           paymentMethod: "PAYPAL",
           amount,
@@ -233,9 +337,23 @@ export class PaymentService {
         },
       });
 
-      // Store payment session
-      await prisma.paymentSession.create({
-        data: {
+      // Store payment session (upsert to handle existing sessions)
+      await prisma.paymentSession.upsert({
+        where: { orderId },
+        update: {
+          paymentMethod: "STRIPE",
+          amount,
+          currency: currency.toUpperCase(),
+          status: "PENDING",
+          sessionId: paymentIntent.id,
+          clientSecret: paymentIntent.client_secret,
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
+          metadata: {
+            paymentIntentId: paymentIntent.id,
+            status: paymentIntent.status,
+          },
+        },
+        create: {
           orderId,
           paymentMethod: "STRIPE",
           amount,
@@ -329,6 +447,84 @@ export class PaymentService {
   // ===========================================
 
   /**
+   * Create Google Pay Session
+   * @param amount - Payment amount
+   * @param currency - Currency code (default: USD)
+   * @param orderId - Internal order ID
+   * @returns Promise<any>
+   */
+  static async createGooglePaySession(
+    amount: number,
+    currency: string = "USD",
+    orderId: string
+  ): Promise<any> {
+    try {
+      console.log("=== createGooglePaySession ===");
+      console.log("Amount:", amount);
+      console.log("Currency:", currency);
+      console.log("Order ID:", orderId);
+
+      // Validate input parameters
+      if (!amount || amount <= 0) {
+        throw new Error("Invalid amount: must be greater than 0");
+      }
+
+      if (!orderId || orderId.trim() === "") {
+        throw new Error("Invalid order ID: order ID is required");
+      }
+
+      // Store payment session (upsert to handle existing sessions)
+      const paymentSession = await prisma.paymentSession.upsert({
+        where: { orderId },
+        update: {
+          paymentMethod: "GOOGLE_PAY",
+          amount,
+          currency: currency.toUpperCase(),
+          status: "PENDING",
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
+          metadata: {
+            sessionCreatedAt: new Date().toISOString(),
+            sessionType: "google_pay",
+            environment: process.env.NODE_ENV || "development",
+          },
+        },
+        create: {
+          orderId,
+          paymentMethod: "GOOGLE_PAY",
+          amount,
+          currency: currency.toUpperCase(),
+          status: "PENDING",
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
+          metadata: {
+            sessionCreatedAt: new Date().toISOString(),
+            sessionType: "google_pay",
+            environment: process.env.NODE_ENV || "development",
+          },
+        },
+      });
+
+      console.log("Google Pay session created:", paymentSession);
+
+      return {
+        sessionId: paymentSession.id,
+        orderId: paymentSession.orderId,
+        amount: paymentSession.amount,
+        currency: paymentSession.currency,
+        status: paymentSession.status,
+        expiresAt: paymentSession.expiresAt,
+      };
+    } catch (error) {
+      console.error("Google Pay session creation error:", error);
+      throw new ApiError(
+        500,
+        `Google Pay session creation error: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`
+      );
+    }
+  }
+
+  /**
    * Process Google Pay Payment
    * @param paymentData - Google Pay payment data
    * @param amount - Payment amount
@@ -357,9 +553,24 @@ export class PaymentService {
         },
       });
 
-      // Store payment session
-      await prisma.paymentSession.create({
-        data: {
+      // Store payment session (upsert to handle existing sessions)
+      await prisma.paymentSession.upsert({
+        where: { orderId },
+        update: {
+          paymentMethod: "GOOGLE_PAY",
+          amount,
+          currency: "USD",
+          status:
+            paymentIntent.status === "succeeded" ? "COMPLETED" : "PENDING",
+          sessionId: paymentIntent.id,
+          googlePayToken: paymentToken,
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
+          metadata: {
+            paymentIntentId: paymentIntent.id,
+            status: paymentIntent.status,
+          },
+        },
+        create: {
           orderId,
           paymentMethod: "GOOGLE_PAY",
           amount,
@@ -411,9 +622,21 @@ export class PaymentService {
    */
   static async processCODOrder(orderId: string, amount: number): Promise<any> {
     try {
-      // Store payment session
-      await prisma.paymentSession.create({
-        data: {
+      // Store payment session (upsert to handle existing sessions)
+      await prisma.paymentSession.upsert({
+        where: { orderId },
+        update: {
+          paymentMethod: "COD",
+          amount,
+          currency: "USD",
+          status: "PENDING",
+          expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
+          metadata: {
+            orderCreatedAt: new Date().toISOString(),
+            paymentDueOnDelivery: true,
+          },
+        },
+        create: {
           orderId,
           paymentMethod: "COD",
           amount,
@@ -782,7 +1005,7 @@ export class PaymentService {
           body: JSON.stringify({
             amount: {
               currency_code: "USD",
-              value: amount.toFixed(2),
+              value: Number(amount).toFixed(2),
             },
           }),
         }

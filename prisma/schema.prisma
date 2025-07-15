@@ -69,6 +69,7 @@ enum NotificationType {
   ORDER
   REFUND
   SHIPMENT
+  PROMOTION
 }
 
 enum DiscountType {

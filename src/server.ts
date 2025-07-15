@@ -17,23 +17,37 @@ import wishlistRoute from "./routes/wishlistRoute";
 import compareRoute from "./routes/compareRoute";
 import orderRoute from "./routes/orderRoute";
 import paymentRoute from "./routes/paymentRoutes";
+import notificationRoute from "./routes/notificationRoute";
+import reportRoute from "./routes/reportRoute";
+import { scheduleCleanup } from "./scripts/cleanupReports";
 
 dotenv.config();
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3001;
 
 const app = express();
 
 const corsOptions = {
   origin: process.env.FRONTEND_URL || "http://localhost:3000",
   credentials: true,
-  methods: ["GET", "POST", "PUT", "DELETE"],
-  allowedHeaders: ["Content-Type", "Authorization"],
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "Accept",
+    "X-Requested-With",
+  ],
+  exposedHeaders: ["Content-Type", "Authorization"],
 };
 
-app.use(express.json());
+// Body parsing middleware
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+
 app.use(cors(corsOptions));
 app.use(cookieParser());
+
+// Clean up - remove debug middleware
 
 // Serve static files from the 'uploads' directory
 app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
@@ -50,6 +64,8 @@ app.use("/api/wishlist", wishlistRoute);
 app.use("/api/compare", compareRoute);
 app.use("/api/orders", orderRoute);
 app.use("/api/payment", paymentRoute);
+app.use("/api/notifications", notificationRoute);
+app.use("/api/reports", reportRoute);
 
 app.get("/", (req, res) => {
   res.send("Hello from E-commerce API");
@@ -62,6 +78,9 @@ testEmailConfig().then((isValid) => {
     console.log("Email service configuration failed");
   }
 });
+
+// تفعيل جدولة تنظيف التقارير
+scheduleCleanup();
 
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);

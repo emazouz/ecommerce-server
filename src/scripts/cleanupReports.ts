@@ -2,12 +2,12 @@ import { ReportService } from "../services/reportService";
 import { prisma } from "../utils/prisma";
 import cron from "node-cron";
 
-// تنظيف التقارير المنتهية الصلاحية
+// تنظيف التقارير المنتهية الصلاحية - Updated
 const cleanupExpiredReports = async () => {
   try {
     console.log("Starting cleanup of expired reports...");
 
-    const result = await ReportService.cleanupExpiredReports();
+    const result = await ReportService.Analytical.cleanupExpiredReports();
 
     console.log(
       `Cleanup completed. Deleted ${result.deletedCount} expired reports.`
@@ -40,7 +40,7 @@ const cleanupOldReports = async () => {
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-    const result = await prisma.report.deleteMany({
+    const result = await prisma.analyticalReport.deleteMany({
       where: {
         createdAt: {
           lt: thirtyDaysAgo,
@@ -65,7 +65,7 @@ const cleanupFailedReports = async () => {
   try {
     console.log("Starting cleanup of failed reports...");
 
-    const result = await prisma.report.deleteMany({
+    const result = await prisma.analyticalReport.deleteMany({
       where: {
         status: "FAILED",
         createdAt: {

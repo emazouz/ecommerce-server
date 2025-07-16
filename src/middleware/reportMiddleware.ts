@@ -96,13 +96,13 @@ export const checkReportOwnership = async (
       return;
     }
 
-    // التحقق من ملكية التقرير
-    const report = await prisma.report.findUnique({
+    // التحقق من ملكية التقرير (للتقارير التحليلية فقط)
+    const analyticalReport = await prisma.analyticalReport.findUnique({
       where: { id: reportId },
       select: { generatedBy: true },
     });
 
-    if (!report) {
+    if (!analyticalReport) {
       res.status(404).json({
         success: false,
         message: "التقرير غير موجود",
@@ -110,7 +110,7 @@ export const checkReportOwnership = async (
       return;
     }
 
-    if (report.generatedBy !== userId) {
+    if (analyticalReport.generatedBy !== userId) {
       res.status(403).json({
         success: false,
         message: "ليس لديك صلاحية للوصول إلى هذا التقرير",

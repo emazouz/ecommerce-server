@@ -108,11 +108,7 @@ enum ReportType {
   USER_ACTIVITY
 }
 
-enum FileFormat {
-  JSON
-  CSV
-  PDF
-}
+
 
 enum JobStatus {
   PENDING
@@ -148,6 +144,69 @@ enum RefundMethod {
   STORE_CREDIT
 }
 
+
+// --- تقارير العملاء ---
+enum CustomerReportType {
+  FEEDBACK        // تعليق أو اقتراح
+  BUG_REPORT      // الإبلاغ عن خطأ أو مشكلة
+  ABUSE_REPORT    // الإبلاغ عن إساءة استخدام
+  PRODUCT_ISSUE   // مشكلة في المنتج
+  DELIVERY_ISSUE  // مشكلة في التوصيل
+  ORDER_ISSUE     // مشكلة في الطلب
+  PAYMENT_ISSUE   // مشكلة في الدفع
+  OTHER           // أخرى
+}
+
+// --- تقارير الموظفين ---
+enum AdminReportType {
+  INVENTORY_ISSUE    // مشكلة في المخزون
+  SUPPLIER_ISSUE     // مشكلة مع المورد
+  SYSTEM_NOTE        // ملاحظة نظام
+  USER_BEHAVIOR      // سلوك المستخدم
+  QUALITY_ISSUE      // مشكلة في الجودة
+  OPERATIONAL_NOTE   // ملاحظة تشغيلية
+  MAINTENANCE        // صيانة
+  OTHER              // أخرى
+}
+
+// --- التقارير الإدارية ---
+enum AnalyticalReportType {
+  SALES            // تقرير المبيعات
+  INVENTORY        // تقرير المخزون
+  USER_ACTIVITY    // تقرير نشاط المستخدمين
+  FINANCIAL        // تقرير مالي
+  PERFORMANCE      // تقرير الأداء
+  CUSTOMER_BEHAVIOR // سلوك العملاء
+}
+
+// --- حالة التقارير ---
+enum ReportStatus {
+  PENDING     // في انتظار المراجعة
+  REVIEWED    // تمت المراجعة
+  RESOLVED    // تم الحل
+  REJECTED    // مرفوض
+  OPEN        // مفتوح
+  CLOSED      // مغلق
+  IN_PROGRESS // قيد التنفيذ
+}
+
+// --- أولوية التقارير ---
+enum ReportPriority {
+  LOW     // منخفضة
+  MEDIUM  // متوسطة
+  HIGH    // عالية
+  URGENT  // عاجلة
+}
+
+enum FileFormat {
+  JSON
+  CSV
+  PDF
+  EXCEL
+  HTML
+}
+
+
 // ==============================================================================
 // MODELS - نماذج البيانات
 // ==============================================================================
@@ -181,9 +240,19 @@ model User {
   compares               Compare[]
   blogPosts              BlogPost[]
   adminLogs              AdminLog[]
+  
   replies                Reply[]
   emailVerifications     EmailVerification[]
   coupons                Coupon[]
+  
+  // --- علاقات التقارير ---
+  customerReports        CustomerReport[]    @relation("CustomerReportReporter")
+  reviewedCustomerReports CustomerReport[]   @relation("CustomerReportReviewer")
+  adminReports           AdminReport[]       @relation("AdminReportCreator")
+  relatedAdminReports    AdminReport[]       @relation("AdminReportRelatedUser")
+  assignedAdminReports   AdminReport[]       @relation("AdminReportAssignee")
+  analyticalReports      AnalyticalReport[]  @relation("AnalyticalReportGenerator")
+
 }
 
 // --- Banner Model ---
@@ -415,21 +484,111 @@ model Notification {
 }
 
 // --- Report Model ---
-model Report {
-  id          String     @id @default(uuid())
-  name        String // اسم التقرير المعروض
-  reportType  ReportType // SALES, INVENTORY, USER_ACTIVITY, etc.
-  format      FileFormat @default(JSON) // JSON, CSV, PDF, etc.
-  data        Json       @db.Json
-  status      JobStatus  @default(COMPLETED) // PENDING, PROCESSING, COMPLETED, FAILED
-  filters     Json?      @db.Json // معايير التصفية المستخدمة
-  generatedBy String // ID المستخدم/النظام الذي أنشأ التقرير
-  downloadUrl String? // رابط التحميل للتقرير الكبير
-  expiresAt   DateTime? // تاريخ انتهاء صلاحية التقرير
-  createdAt   DateTime   @default(now())
 
-  @@index([reportType, createdAt])
+
+// --- Customer Report Model ---
+model CustomerReport {
+  id            String              @id @default(uuid())
+  reporterId    String              // معرف العميل الذي أنشأ التقرير
+  type          CustomerReportType  // نوع التقرير (FEEDBACK, BUG_REPORT, etc.)
+  title         String              // عنوان التقرير
+  description   String              // وصف التقرير
+  priority      ReportPriority      @default(MEDIUM) // أولوية التقرير
+  status        ReportStatus        @default(PENDING) // حالة التقرير
+  
+  // معلومات الهدف (إذا كان التقرير عن شيء محدد)
+  targetId      String?             // معرف الهدف (منتج، طلب، إلخ)
+  targetType    String?             // نوع الهدف (product, order, user, etc.)
+  
+  // معلومات المراجعة
+  reviewedBy    String?             // معرف الموظف الذي راجع التقرير
+  reviewedAt    DateTime?           // تاريخ المراجعة
+  response      String?             // رد الموظف على التقرير
+  
+  // معلومات إضافية
+  attachments   String[]            // مرفقات (صور، ملفات)
+  metadata      Json?               @db.Json // معلومات إضافية
+  
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+  
+  // العلاقات
+  reporter      User                @relation("CustomerReportReporter", fields: [reporterId], references: [id])
+  reviewer      User?               @relation("CustomerReportReviewer", fields: [reviewedBy], references: [id])
+  
+  @@index([reporterId, status])
+  @@index([type, createdAt])
+  @@index([status, priority])
 }
+
+// --- Admin Report Model ---
+model AdminReport {
+  id            String            @id @default(uuid())
+  createdBy     String            // معرف الموظف الذي أنشأ التقرير
+  type          AdminReportType   // نوع التقرير (INVENTORY_ISSUE, SUPPLIER_ISSUE, etc.)
+  title         String            // عنوان التقرير
+  description   String            // وصف التقرير
+  priority      ReportPriority    @default(MEDIUM) // أولوية التقرير
+  status        ReportStatus      @default(OPEN) // حالة التقرير
+  
+  // معلومات الهدف
+  relatedUserId String?           // معرف المستخدم المرتبط (إن وجد)
+  relatedOrderId String?          // معرف الطلب المرتبط (إن وجد)
+  relatedProductId String?        // معرف المنتج المرتبط (إن وجد)
+  
+  // معلومات المعالجة
+  assignedTo    String?           // معرف الموظف المكلف بالمعالجة
+  assignedAt    DateTime?         // تاريخ التكليف
+  resolvedAt    DateTime?         // تاريخ الحل
+  
+  // معلومات إضافية
+  attachments   String[]          // مرفقات
+  tags          String[]          // علامات للتصنيف
+  metadata      Json?             @db.Json // معلومات إضافية  
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  
+  // العلاقات
+  creator       User              @relation("AdminReportCreator", fields: [createdBy], references: [id])
+  relatedUser   User?             @relation("AdminReportRelatedUser", fields: [relatedUserId], references: [id])
+  assignee      User?             @relation("AdminReportAssignee", fields: [assignedTo], references: [id])
+  
+  @@index([createdBy, status])
+  @@index([type, createdAt])
+  @@index([status, priority])
+  @@index([assignedTo, status])
+}
+
+// --- Analytical Report Model ---
+model AnalyticalReport {
+  id            String                @id @default(uuid())
+  name          String                // اسم التقرير المعروض
+  reportType    AnalyticalReportType  // SALES, INVENTORY, USER_ACTIVITY, etc.
+  format        FileFormat            @default(JSON) // JSON, CSV, PDF, etc.
+  data          Json                  @db.Json // بيانات التقرير
+  status        JobStatus             @default(COMPLETED) // PENDING, PROCESSING, COMPLETED, FAILED
+  filters       Json?                 @db.Json // معايير التصفية المستخدمة
+  generatedBy   String                // ID المستخدم/النظام الذي أنشأ التقرير
+  downloadUrl   String?               // رابط التحميل للتقرير الكبير
+  expiresAt     DateTime?             // تاريخ انتهاء صلاحية التقرير
+  
+  // معلومات الجدولة
+  isScheduled   Boolean               @default(false) // هل التقرير مجدول؟
+  scheduleConfig Json?                @db.Json // إعدادات الجدولة
+  nextRunAt     DateTime?             // التشغيل التالي
+  
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+  
+  // العلاقات
+  generator     User                  @relation("AnalyticalReportGenerator", fields: [generatedBy], references: [id])
+  
+  @@index([reportType, createdAt])
+  @@index([status, generatedBy])
+  @@index([isScheduled, nextRunAt])
+}
+
+
 
 // --- Coupon Model ---
 
@@ -743,3 +902,5 @@ model AdminLog {
   target    String
   createdAt DateTime @default(now())
 }
+
+

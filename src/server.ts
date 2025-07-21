@@ -19,6 +19,8 @@ import orderRoute from "./routes/orderRoute";
 import paymentRoute from "./routes/paymentRoutes";
 import notificationRoute from "./routes/notificationRoute";
 import reportRoute from "./routes/reportRoute";
+import flashSaleRouter from "./routes/flashSaleRoute";
+
 import { scheduleCleanup } from "./scripts/cleanupReports";
 
 dotenv.config();
@@ -66,6 +68,7 @@ app.use("/api/orders", orderRoute);
 app.use("/api/payment", paymentRoute);
 app.use("/api/notifications", notificationRoute);
 app.use("/api/reports", reportRoute);
+app.use("/api/flash-sales", flashSaleRouter);
 
 app.get("/", (req, res) => {
   res.send("Hello from E-commerce API");

@@ -9,11 +9,13 @@ import {
   validateFlashSale,
 } from "../validators/productValidator";
 import { CloudinaryResponse } from "../types/cloudinary";
-import { AuthenticatedRequest } from "../middleware/authMiddleware";
+import {
+  AuthenticatedRequest,
+  authenticateJwt as authMiddleware,
+} from "../middleware/authMiddleware";
 import fs from "fs";
 import { ProductFilters, ProductVariantInput } from "../types/productTypes";
 import { Router } from "express";
-import { authenticateJwt as authMiddleware } from "../middleware/authMiddleware";
 import uploadMiddleware from "../middleware/uploadMiddleware";
 
 // Update the FileRequest interface to handle an array of files from upload.any()
@@ -436,13 +438,6 @@ class ProductController {
       // Step 1: Parse and validate form data
       const { parsedData, variantsData } = parseMultipartFormData(req.body);
 
-      console.log("=== DEBUG INFO ===");
-      console.log("parsedData:", parsedData);
-      console.log("variantsData:", variantsData);
-      console.log("parsedData.variants:", parsedData.variants);
-      console.log("parsedData.typeId:", parsedData.typeId);
-      console.log("==================");
-
       // Step 2: Validate product type if provided
       if (parsedData.typeId) {
         const productType = await prisma.productType.findUnique({
@@ -659,7 +654,7 @@ class ProductController {
           isSale,
           isFlashSale,
           isNew,
-          slug: name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+          slug: name.toLowerCase().replace(/[^a-z0-9]+/g, "-") + "-" + Date.now(),
           images: images,
           thumbImage: thumbImage,
           inventory: {

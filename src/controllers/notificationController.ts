@@ -4,6 +4,7 @@ import { NotificationService } from "../services/notificationService";
 import { ApiError } from "../utils/ApiError";
 import { NotificationType } from "@prisma/client";
 import { prisma } from "../utils/prisma";
+import { sendToAll } from "../utils/email";
 
 // جلب جميع الإشعارات للمستخدم
 export const getUserNotifications = async (
@@ -563,5 +564,52 @@ export const cleanupOldNotifications = async (
         message: "Internal server error",
       });
     }
+  }
+};
+
+export const sendEmailToAllUsers = async (
+  req: AuthenticatedRequest,
+  res: Response
+) => {
+  try {
+    const { title, message, type } = req.body;
+
+    console.log("title :", title);
+    console.log("message :", message);
+    console.log("type :", type);
+
+    if (!title || !message || !type) {
+      return res.status(400).json({
+        success: false,
+        message: "Data are required.",
+      });
+    }
+
+    const users = await prisma.user.findMany({
+      select: { email: true },
+    });
+
+    const emails = users.map((user) => user.email).filter(Boolean);
+
+    if (emails.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "No user emails found.",
+      });
+    }
+
+    // Send email to each user (you can batch or use BCC)
+    sendToAll(emails, title, message);
+
+    return res.status(200).json({
+      success: true,
+      message: "Emails sent successfully to all users.",
+    });
+  } catch (err) {
+    console.error("Error sending emails:", err);
+    return res.status(500).json({
+      success: false,
+      message: "An error occurred while sending emails.",
+    });
   }
 };

@@ -1,5 +1,6 @@
 // utils/email.ts
 import nodemailer from "nodemailer";
+import { sendToAllUsers } from "../email/sendToAllUsers";
 
 // Create reusable transporter
 const transporter = nodemailer.createTransport({
@@ -20,6 +21,24 @@ export const sendResetEmail = async (to: string, message: string) => {
       to: to,
       subject: "Reset your password",
       html: message,
+    });
+
+    return info;
+  } catch (error) {
+    console.error("Error sending email:", error);
+    throw new Error("Failed to send email");
+  }
+};
+
+// send to all user in database
+export const sendToAll = async (to: any[], title: string, message: string) => {
+  try {
+    // Send mail
+    const info = await transporter.sendMail({
+      from: `"emazouz.dev" <${process.env.EMAIL_USER}>`,
+      to: to,
+      subject: title,
+      html: sendToAllUsers(message),
     });
 
     return info;

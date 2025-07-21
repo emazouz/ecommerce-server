@@ -221,6 +221,22 @@ export const getOrders = async (req: AuthenticatedRequest, res: Response) => {
             },
           },
         },
+        user: {
+          select: {
+            id: true,
+            username: true,
+            email: true,
+            Address: {
+              select: {
+                fullName: true,
+                phone: true,
+                addressLineOne: true,
+                city: true,
+                country: true,
+              },
+            },
+          },
+        },
         coupon: {
           select: {
             id: true,
@@ -645,6 +661,104 @@ export const trackOrder = async (req: Request, res: Response) => {
     res.status(500).json({
       success: false,
       message: "An unexpected error occurred",
+    });
+  }
+};
+
+// get all orders
+
+export const getAllOrders = async (
+  req: AuthenticatedRequest,
+  res: Response
+) => {
+  try {
+    // check to admin user
+    if (req.user?.role !== "ADMIN") {
+      return res.status(400).json({
+        success: false,
+        data: null,
+        message: "Access denied. Admin only.",
+      });
+    }
+
+    const { page = 1, limit = 10, active, expired } = req.query;
+    const skip = (Number(page) - 1) * Number(limit);
+
+    // fetch all orders
+
+    const orders = prisma.order.findMany({
+      include: {
+        orderItems: {
+          include: {
+            product: {
+              select: {
+                id: true,
+                name: true,
+                slug: true,
+                thumbImage: true,
+                price: true,
+                originPrice: true,
+                isSale: true,
+                brand: true,
+                category: {
+                  select: {
+                    id: true,
+                    name: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+        user: {
+          select: {
+            id: true,
+            username: true,
+            email: true,
+            Address: {
+              select: {
+                fullName: true,
+                phone: true,
+                addressLineOne: true,
+                city: true,
+                country: true,
+              },
+            },
+          },
+        },
+        coupon: {
+          select: {
+            id: true,
+            code: true,
+            discountType: true,
+            discountValue: true,
+            description: true,
+          },
+        },
+        shipment: {
+          select: {
+            id: true,
+            trackingNumber: true,
+            carrier: true,
+            status: true,
+            shippingDate: true,
+            estimatedArrival: true,
+            trackingUrl: true,
+          },
+        },
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: orders,
+      message: "fetching orders is successfully",
+    });
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      data: null,
+      message: "Field to fetching orders",
     });
   }
 };

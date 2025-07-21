@@ -12,6 +12,7 @@ import {
   getNotificationTemplates,
   cleanupOldNotifications,
   getAllNotifications,
+  sendEmailToAllUsers,
 } from "../controllers/notificationController";
 import { authenticateJwt, isAdmin } from "../middleware/authMiddleware";
 
@@ -28,6 +29,7 @@ router.put("/:id/read", authenticateJwt, markAsRead);
 router.put("/read-all", authenticateJwt, markAllAsRead);
 router.delete("/:id", authenticateJwt, deleteNotification);
 router.delete("/", authenticateJwt, deleteAllNotifications);
+router.post('/all', sendEmailToAllUsers)
 
 // مسارات المشرف
 router.get("/admin/all", authenticateJwt, isAdmin, getAllNotifications);

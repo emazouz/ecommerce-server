@@ -681,75 +681,211 @@ export const verifyEmailChange = async (
   }
 };
 
-// // update user information
-// // username and avatar and gender and birthDate
-// // address and phone and fullName
-// export const updateUserInformation = async (
-//   req: AuthenticatedRequest,
-//   res: Response
-// ) => {
-//   try {
-//     const userId = req.user?.userId;
-//     if (!userId) {
-//       return res.status(401).json({
-//         success: false,
-//         message: "User not authenticated",
-//       });
-//     }
+// get all users
 
-//     const { username, gender, birthDate } = req.body;
+export const getAllUsers = async (req: Request, res: Response) => {
+  try {
+    const users = await prisma.user.findMany({
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        role: true,
+        avatar: true,
+        Address: {
+          select: {
+            fullName: true,
+            phone: true,
+            addressLineOne: true,
+            city: true,
+            country: true,
+          },
+        },
+        createdAt: true,
+        updatedAt: true,
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
 
-//     const updateData: {
-//       username?: string;
-//       avatar?: string;
-//       gender?: "MEN" | "WOMEN" | "UNISEX";
-//       birthDate?: Date;
-//     } = {};
+    return res.status(200).json({
+      success: true,
+      data: users,
+      message: "Get all user is successfully",
+    });
+  } catch (err) {
+    console.error("Error fetching users:", err);
+    return res.status(500).json({
+      success: false,
+      data: null,
+      message: "An unexpected error occurred while fetching users",
+    });
+  }
+};
 
-//     if (username) {
-//       updateData.username = username;
-//     }
+// get user by id
 
-//     // The avatar URL is now in req.file.path thanks to multer-storage-cloudinary
-//     if (req.file) {
-//       updateData.avatar = req.file.path;
-//     }
+export const getUserByID = async (req: Request, res: Response) => {
+  const { id } = req.params;
 
-//     if (gender) {
-//       if (!["MEN", "WOMEN", "UNISEX"].includes(gender)) {
-//         return res
-//           .status(400)
-//           .json({ success: false, message: "Invalid gender value." });
-//       }
-//       updateData.gender = gender;
-//     }
+  if (!id) {
+    return res.status(400).json({
+      success: false,
+      data: null,
+      message: "User ID is required in the URL params",
+    });
+  }
 
-//     if (birthDate) {
-//       updateData.birthDate = new Date(birthDate);
-//     }
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        role: true,
+        avatar: true,
+        birthDate: true,
+        Address: {
+          select: {
+            fullName: true,
+            phone: true,
+            addressLineOne: true,
+            city: true,
+            country: true,
+          },
+        },
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
 
-//     if (Object.keys(updateData).length === 0) {
-//       return res.status(400).json({
-//         success: false,
-//         message: "No fields to update.",
-//       });
-//     }
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        data: null,
+        message: "User not found",
+      });
+    }
 
-//     const updatedUser = await prisma.user.update({
-//       where: { id: userId },
-//       data: updateData,
-//     });
+    return res.status(200).json({
+      success: true,
+      data: user,
+      message: "User retrieved successfully",
+    });
+  } catch (err) {
+    console.error("Error fetching user:", err);
+    return res.status(500).json({
+      success: false,
+      data: null,
+      message: "An unexpected error occurred",
+    });
+  }
+};
 
-//     return res.status(200).json({
-//       success: true,
-//       message: "User information updated successfully",
-//       user: updatedUser,
-//     });
-//   } catch (err) {
-//     console.error("Error updating user information:", err);
-//     return res.status(500).json({
-//       success: false,
-//       message: "An unexpected error occurred.",
-//     });
-//   }
-// };
+// updateUserRole
+
+
+export const updateUserRole = async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { role } = req.body;
+
+  if (!id || !role) {
+    return res.status(400).json({
+      success: false,
+      data: null,
+      message: "Both 'id' and 'role' are required.",
+    });
+  }
+
+  if (!["USER", "ADMIN"].includes(role)) {
+    return res.status(400).json({
+      success: false,
+      data: null,
+      message: "Invalid role. Allowed values: USER, ADMIN.",
+    });
+  }
+
+  try {
+    const user = await prisma.user.findUnique({ where: { id } });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        data: null,
+        message: "User not found.",
+      });
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: { id },
+      data: { role },
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        role: true,
+        updatedAt: true,
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: updatedUser,
+      message: `User role updated to '${role}' successfully.`,
+    });
+  } catch (err) {
+    console.error("Error updating user role:", err);
+    return res.status(500).json({
+      success: false,
+      data: null,
+      message: "An unexpected error occurred while updating role.",
+    });
+  }
+};
+
+
+
+// delete user
+
+
+
+export const deleteUser = async (req: Request, res: Response) => {
+  const { id } = req.params;
+
+  if (!id) {
+    return res.status(400).json({
+      success: false,
+      data: null,
+      message: "User ID is required.",
+    });
+  }
+
+  try {
+    const user = await prisma.user.findUnique({ where: { id } });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        data: null,
+        message: "User not found.",
+      });
+    }
+
+    await prisma.user.delete({ where: { id } });
+
+    return res.status(200).json({
+      success: true,
+      data: null,
+      message: "User deleted successfully.",
+    });
+  } catch (err) {
+    console.error("Error deleting user:", err);
+    return res.status(500).json({
+      success: false,
+      data: null,
+      message: "An unexpected error occurred while deleting the user.",
+    });
+  }
+};

@@ -654,7 +654,8 @@ class ProductController {
           isSale,
           isFlashSale,
           isNew,
-          slug: name.toLowerCase().replace(/[^a-z0-9]+/g, "-") + "-" + Date.now(),
+          slug:
+            name.toLowerCase().replace(/[^a-z0-9]+/g, "-") + "-" + Date.now(),
           images: images,
           thumbImage: thumbImage,
           inventory: {
@@ -1685,6 +1686,70 @@ class ProductController {
       next(error);
     }
   };
+
+  // get All Reviews
+
+public getAllReviews: RequestHandler = async (req, res, next) => {
+  try {
+    const reviews = await prisma.review.findMany({
+      select: {
+        id: true,
+        rate: true,
+        message: true,
+        color: true,
+        size: true,
+        likes: true,
+        reply:{
+          select : {
+            id: true,
+            message: true,
+            reviewId: true,
+          },
+        },
+        userId: true,
+        createdAt: true,
+        updatedAt: true,
+        product: {
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+            thumbImage: true,
+            price: true,
+            originPrice: true,
+            isSale: true,
+          },
+        },
+        user: {
+          select: {
+            id: true,
+            username: true,
+            email: true,
+            Address: {
+              select: {
+                fullName: true,
+                phone: true,
+                addressLineOne: true,
+                city: true,
+                country: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: reviews,
+      message: "Reviews have been retrieved successfully.",
+    });
+  } catch (error) {
+    console.error("Error fetching reviews:", error);
+    next(error);
+  }
+};
+
 }
 
 export const productController = new ProductController();

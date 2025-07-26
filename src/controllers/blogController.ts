@@ -1,487 +1,367 @@
-// import { Prisma } from '@prisma/client';
-// import { Request, Response, NextFunction } from 'express';
-// import { prisma } from '../utils/prisma';
-// import { uploadToCloudinary, deleteFromCloudinary } from '../utils/cloudinary';
-// import { ApiError } from '../utils/ApiError';
-// import { AuthenticatedRequest } from '../middleware/authMiddleware';
-// import uploadMiddleware from '../middleware/uploadMiddleware';
-// import fs from 'fs';
+/* -------------------------------------------------------------------------- */
+/*  BlogPostController                                                        */
+/* -------------------------------------------------------------------------- */
 
-// interface FileRequest extends AuthenticatedRequest {
-//   files?: Express.Multer.File[];
-// }
+import { Prisma, PostStatus, UserRole } from "@prisma/client";
+import { Request, Response, NextFunction } from "express";
+import { prisma } from "../utils/prisma";
+import { uploadToCloudinary, deleteFromCloudinary } from "../utils/cloudinary";
+import { ApiError } from "../utils/ApiError";
+import { AuthenticatedRequest } from "../middleware/authMiddleware";
+import fs from "fs";
 
-// interface BlogPostImages {
-//   featured?: string;
-//   thumbnail?: string;
-//   gallery?: string[];
-// }
+/* -------------------------------------------------------------------------- */
+/*  Types                                                                     */
+/* -------------------------------------------------------------------------- */
 
-// // Helper functions
-// const cleanupFiles = (files: Express.Multer.File[]) => {
-//   files.forEach(file => {
-//     try {
-//       fs.unlinkSync(file.path);
-//     } catch (err) {
-//       console.error(`Failed to delete file: ${file.path}`, err);
-//     }
-//   });
-// };
+interface FileRequest extends AuthenticatedRequest {
+  files?: Express.Multer.File[];
+}
 
-// const parseImages = (images?: string): BlogPostImages | null => {
-//   if (!images) return null;
-//   try {
-//     return JSON.parse(images);
-//   } catch (error) {
-//     throw new ApiError(400, 'Invalid images JSON format');
-//   }
-// };
+interface BlogPostImages {
+  [key: string]: string | string[] | undefined;
+  featured?: string;
+  thumbnail?: string;
+  gallery?: string[];
+}
 
-// const generateSlug = (title: string): string => {
-//   return title
-//     .toLowerCase()
-//     .replace(/[^a-z0-9]+/g, '-')
-//     .replace(/(^-|-$)/g, '');
-// };
+/* -------------------------------------------------------------------------- */
+/*  Helpers                                                                   */
+/* -------------------------------------------------------------------------- */
 
-// // Controller
-// export const BlogPostController = {
-//   // Create Blog Post
-//   async createBlogPost(req: FileRequest, res: Response, next: NextFunction) {
-//     const { user } = req;
-//     const rawFiles = req.files || [];
-//     let uploadedImages: { [key: string]: string } = {};
+const cleanupFiles = (files: Express.Multer.File[]) => {
+  files.forEach((f) => {
+    try {
+      fs.unlinkSync(f.path);
+    } catch {
+      /* silent */
+    }
+  });
+};
 
-//     try {
-//       // Parse and validate input
-//       const {
-//         title,
-//         categoryId,
-//         tags,
-//         content,
-//         excerpt,
-//         featured,
-//         status,
-//         seoTitle,
-//         seoDesc,
-//         seoKeywords,
-//         images: imagesJson,
-//       } = req.body;
+const safeJSON = <T>(raw: unknown, fallback: T): T => {
+  if (typeof raw !== "string") return fallback;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    throw new ApiError(400, "Invalid JSON format");
+  }
+};
 
-//       if (!title || !content) {
-//         throw new ApiError(400, 'Title and content are required');
-//       }
+const generateSlug = async (title: string, postId?: string) => {
+  const base = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
 
-//       // Handle file uploads
-//       if (rawFiles.length > 0) {
-//         const uploadResults = await Promise.all(
-//           rawFiles.map(file => uploadToCloudinary(file, 'blog'))
-//         );
+  let slug = base;
+  let n = 1;
 
-//         rawFiles.forEach((file, index) => {
-//           uploadedImages[file.fieldname] = uploadResults[index].url;
-//         });
+  // If we’re editing, allow collision with the same record
+  const notId = postId ? { NOT: { id: postId } } : undefined;
 
-//         // Cleanup temp files
-//         cleanupFiles(rawFiles);
-//       }
+  while (await prisma.blogPost.findFirst({ where: { slug, ...notId } })) {
+    slug = `${base}-${n++}`;
+  }
+  return slug;
+};
 
-//       // Parse and merge images
-//       const parsedImages = parseImages(imagesJson);
-//       const finalImages = {
-//         ...parsedImages,
-//         ...uploadedImages,
-//       };
+const parseTags = (tags: unknown): string[] =>
+  Array.isArray(tags)
+    ? (tags as string[])
+    : typeof tags === "string"
+    ? tags.split(",").map((t) => t.trim())
+    : [];
 
-//       // Generate slug
-//       let slug = generateSlug(title);
-//       let slugExists = await prisma.blogPost.findUnique({ where: { slug } });
-//       let counter = 1;
-      
-//       while (slugExists) {
-//         slug = `${generateSlug(title)}-${counter}`;
-//         slugExists = await prisma.blogPost.findUnique({ where: { slug } });
-//         counter++;
-//       }
+/* -------------------------------------------------------------------------- */
+/*  Controller                                                                */
+/* -------------------------------------------------------------------------- */
 
-//       // Create blog post
-//       const blogPost = await prisma.blogPost.create({
-//         data: {
-//           title,
-//           slug,
-//           author: { connect: { id: user.id } },
-//           category: categoryId ? { connect: { id: categoryId } } : undefined,
-//           tags: Array.isArray(tags) ? tags : tags?.split(',').map(t => t.trim()) || [],
-//           content: typeof content === 'string' ? JSON.parse(content) : content,
-//           excerpt: excerpt || `${content.substring(0, 150)}...`,
-//           featured: featured === 'true',
-//           status: status || 'DRAFT',
-//           seoTitle: seoTitle || title,
-//           seoDesc: seoDesc || excerpt || `${content.substring(0, 150)}...`,
-//           seoKeywords: seoKeywords || tags?.join(', ') || '',
-//           images: finalImages,
-//           publishedAt: status === 'PUBLISHED' ? new Date() : null,
-//         },
-//         include: {
-//           author: {
-//             select: {
-//               id: true,
-//               name: true,
-//               avatar: true,
-//             },
-//           },
-//           category: {
-//             select: {
-//               id: true,
-//               name: true,
-//               slug: true,
-//             },
-//           },
-//         },
-//       });
+export const BlogPostController = {
+  /* ------------------------------ Create ---------------------------------- */
+  async createBlogPost(req: FileRequest, res: Response, next: NextFunction) {
+    const user = req.user!;
+    const files = req.files ?? [];
+    const uploaded: Record<string, string> = {};
 
-//       res.status(201).json({
-//         success: true,
-//         data: blogPost,
-//       });
-//     } catch (error) {
-//       // Cleanup uploaded images if error occurs
-//       if (Object.keys(uploadedImages).length > 0) {
-//         await Promise.all(
-//           Object.values(uploadedImages).map(url => 
-//             deleteFromCloudinary(url))
-//         );
-//       }
-//       next(error);
-//     }
-//   },
+    try {
+      const {
+        title,
+        categoryId,
+        tags,
+        content,
+        excerpt,
+        featured,
+        status,
+        seoTitle,
+        seoDesc,
+        seoKeywords,
+        images: imagesJson,
+      } = req.body;
 
-//   // Get Blog Post by Slug
-//   async getBlogPostBySlug(req: Request, res: Response, next: NextFunction) {
-//     try {
-//       const { slug } = req.params;
+      if (!title || !content)
+        throw new ApiError(400, "Title and content are required");
 
-//       const blogPost = await prisma.blogPost.update({
-//         where: { slug },
-//         data: {
-//           views: { increment: 1 },
-//         },
-//         include: {
-//           author: {
-//             select: {
-//               id: true,
-//               username: true,
-//               avatar: true,
-//             },
-//           },
-//           category: {
-//             select: {
-//               id: true,
-//               name: true,
-//             },
-//           },
-//         },
-//       });
+      /* ---------- Upload new files ---------- */
+      if (files.length) {
+        const results = await Promise.all(
+          files.map((f) => uploadToCloudinary(f, "blog"))
+        );
+        files.forEach((f, i) => (uploaded[f.fieldname] = results[i].url));
+        cleanupFiles(files);
+      }
 
-//       if (!blogPost) {
-//         throw new ApiError(404, 'Blog post not found');
-//       }
+      /* ---------- Merge images ---------- */
+      const finalImages: BlogPostImages = {
+        ...safeJSON<BlogPostImages | {}>(imagesJson, {}),
+        ...uploaded,
+      };
 
-//       res.json({
-//         success: true,
-//         data: blogPost,
-//       });
-//     } catch (error) {
-//       next(error);
-//     }
-//   },
+      /* ---------- Persist ---------- */
+      const post = await prisma.blogPost.create({
+        data: {
+          title,
+          slug: await generateSlug(title),
+          authorId: user.userId,
+          categoryId: categoryId ? Number(categoryId) : undefined,
+          tags: parseTags(tags),
+          content: typeof content === "string" ? JSON.parse(content) : content,
+          excerpt:
+            excerpt ||
+            (typeof content === "string" ? content.slice(0, 150) : ""),
+          featured: featured === "true",
+          status: (status as PostStatus) || PostStatus.DRAFT,
+          seoTitle: seoTitle || title,
+          seoDesc:
+            seoDesc ||
+            excerpt ||
+            (typeof content === "string" ? content.slice(0, 150) : ""),
+          seoKeywords: seoKeywords || parseTags(tags).join(", "),
+          images: finalImages,
+          publishedAt: status === PostStatus.PUBLISHED ? new Date() : undefined,
+        },
+        include: {
+          author: { select: { id: true, username: true, avatar: true } },
+          category: { select: { id: true, name: true } },
+        },
+      });
 
-//   // Update Blog Post
-//   // async updateBlogPost(req: FileRequest, res: Response, next: NextFunction) {
-//   //   const { id } = req.params;
-//   //   const { user } = (req as AuthenticatedRequest);
-//   //   const rawFiles = req.files || [];
-//   //   let uploadedImages: { [key: string]: string } = {};
-//   //   let imagesToDelete: string[] = [];
+      return res.status(201).json({ success: true, data: post });
+    } catch (err) {
+      /* rollback uploads on error */
+      if (Object.values(uploaded).length) {
+        await Promise.all(Object.values(uploaded).map(deleteFromCloudinary));
+      }
+      return next(err);
+    }
+  },
 
-//   //   try {
-//   //     // Get existing post
-//   //     const existingPost = await prisma.blogPost.findUnique({
-//   //       where: { id },
-//   //     });
+  //   /* -------------------------------- Read ---------------------------------- */
+  //   async getBlogPostBySlug(req: Request, res: Response, next: NextFunction) {
+  //     try {
+  //       const { slug } = req.params;
 
-//   //     if (!existingPost) {
-//   //       throw new ApiError(404, 'Blog post not found');
-//   //     }
+  //       const post = await prisma.blogPost.update({
+  //         where: { slug },
+  //         data: { views: { increment: 1 } },
+  //         include: {
+  //           author: { select: { id: true, username: true, avatar: true } },
+  //           category: { select: { id: true, name: true } },
+  //         },
+  //       });
 
-//   //     // Check authorization
-//   //     if (existingPost.authorId !== user.id && !user.role === 'ADMIN') {
-//   //       throw new ApiError(403, 'Not authorized to update this post');
-//   //     }
+  //       if (!post) throw new ApiError(404, "Blog post not found");
+  //       res.json({ success: true, data: post });
+  //     } catch (err) {
+  //       next(err);
+  //     }
+  //   },
 
-//   //     // Parse input
-//   //     const {
-//   //       title,
-//   //       categoryId,
-//   //       tags,
-//   //       content,
-//   //       excerpt,
-//   //       featured,
-//   //       status,
-//   //       seoTitle,
-//   //       seoDesc,
-//   //       seoKeywords,
-//   //       images: imagesJson,
-//   //       deleteImages,
-//   //     } = req.body;
+  //   /* ------------------------------ Update ---------------------------------- */
+  //   async updateBlogPost(req: FileRequest, res: Response, next: NextFunction) {
+  //     const { id } = req.params;
+  //     const user = req.user!;
+  //     const files = req.files ?? [];
+  //     const uploaded: Record<string, string> = {};
+  //     const removeQueue: string[] = [];
 
-//   //     // Handle file uploads
-//   //     if (rawFiles.length > 0) {
-//   //       const uploadResults = await Promise.all(
-//   //         rawFiles.map(file => uploadToCloudinary(file, 'blog'))
-//   //       );
+  //     try {
+  //       const current = await prisma.blogPost.findUnique({ where: { id } });
+  //       if (!current) throw new ApiError(404, "Blog post not found");
 
-//   //       rawFiles.forEach((file, index) => {
-//   //         uploadedImages[file.fieldname] = uploadResults[index].url;
-//   //       });
+  //       if (current.authorId !== user?.userId && user.role !== UserRole.ADMIN)
+  //         throw new ApiError(403, "Forbidden");
 
-//   //       // Cleanup temp files
-//   //       cleanupFiles(rawFiles);
-//   //     }
+  //       /* ---------- Upload new files ---------- */
+  //       if (files.length) {
+  //         const results = await Promise.all(
+  //           files.map((f) => uploadToCloudinary(f, "blog"))
+  //         );
+  //         files.forEach((f, i) => (uploaded[f.fieldname] = results[i].url));
+  //         cleanupFiles(files);
+  //       }
 
-//   //     // Handle image deletions
-//   //     const parsedDeleteImages = deleteImages 
-//   //       ? JSON.parse(deleteImages) 
-//   //       : [];
-      
-//   //     const existingImages = existingPost.images as unknown as BlogPostImages || {};
-//   //     const updatedImages = { ...existingImages };
+  //       /* ---------- Handle deletions ---------- */
+  //       const pendingDeletion: string[] = safeJSON<string[]>(
+  //         req.body.deleteImages,
+  //         []
+  //       );
+  //       const existingImages = current.images as BlogPostImages;
+  //       pendingDeletion.forEach((field) => {
+  //         const url = existingImages?.[field as keyof BlogPostImages];
+  //         if (url) {
+  //           removeQueue.push(url as string);
+  //           delete existingImages[field as keyof BlogPostImages];
+  //         }
+  //       });
 
-//   //     parsedDeleteImages.forEach((imageField: string) => {
-//   //       if (updatedImages[imageField as keyof BlogPostImages]) {
-//   //         imagesToDelete.push(updatedImages[imageField as keyof BlogPostImages] as string);
-//   //         delete updatedImages[imageField as keyof BlogPostImages];
-//   //       }
-//   //     });
+  //       const finalImages: BlogPostImages = {
+  //         ...existingImages,
+  //         ...safeJSON<BlogPostImages | {}>(req.body.images, {}),
+  //         ...uploaded,
+  //       };
 
-//   //     // Merge with new images
-//   //     const parsedImages = parseImages(imagesJson);
-//   //     const finalImages = {
-//   //       ...updatedImages,
-//   //       ...parsedImages,
-//   //       ...uploadedImages,
-//   //     };
+  //       /* ---------- Persist ---------- */
+  //       const newSlug =
+  //         req.body.title && req.body.title !== current.title
+  //           ? await generateSlug(req.body.title, id)
+  //           : current.slug;
 
-//   //     // Generate new slug if title changed
-//   //     let slug = existingPost.slug;
-//   //     if (title && title !== existingPost.title) {
-//   //       slug = generateSlug(title);
-//   //       const slugExists = await prisma.blogPost.findFirst({
-//   //         where: {
-//   //           slug,
-//   //           NOT: { id },
-//   //         },
-//   //       });
+  //       const updated = await prisma.blogPost.update({
+  //         where: { id },
+  //         data: {
+  //           title: req.body.title ?? current.title,
+  //           slug: newSlug,
+  //           categoryId: req.body.categoryId
+  //             ? Number(req.body.categoryId)
+  //             : current.categoryId,
+  //           tags: req.body.tags ? parseTags(req.body.tags) : current.tags,
+  //           content: req.body.content
+  //             ? typeof req.body.content === "string"
+  //               ? JSON.parse(req.body.content)
+  //               : req.body.content
+  //             : current.content,
+  //           excerpt: req.body.excerpt ?? current.excerpt,
+  //           featured:
+  //             req.body.featured !== undefined
+  //               ? req.body.featured === "true"
+  //               : current.featured,
+  //           status: (req.body.status as PostStatus) ?? current.status,
+  //           seoTitle: req.body.seoTitle ?? current.seoTitle,
+  //           seoDesc: req.body.seoDesc ?? current.seoDesc,
+  //           seoKeywords: req.body.seoKeywords ?? current.seoKeywords,
+  //           images: finalImages,
+  //           publishedAt:
+  //             req.body.status === PostStatus.PUBLISHED &&
+  //             current.status !== PostStatus.PUBLISHED
+  //               ? new Date()
+  //               : current.publishedAt,
+  //         },
+  //         include: {
+  //           author: { select: { id: true, username: true, avatar: true } },
+  //           category: { select: { id: true, name: true } },
+  //         },
+  //       });
 
-//   //       if (slugExists) {
-//   //         let counter = 1;
-//   //         while (slugExists) {
-//   //           slug = `${generateSlug(title)}-${counter}`;
-//   //           const tempExists = await prisma.blogPost.findFirst({
-//   //             where: {
-//   //               slug,
-//   //               NOT: { id },
-//   //             },
-//   //           });
-//   //           if (!tempExists) break;
-//   //           counter++;
-//   //         }
-//   //       }
-//   //     }
+  //       /* ---------- Cloudinary cleanup ---------- */
+  //       if (removeQueue.length) {
+  //         await Promise.all(removeQueue.map(deleteFromCloudinary));
+  //       }
 
-//   //     // Update blog post
-//   //     const updatedPost = await prisma.blogPost.update({
-//   //       where: { id },
-//   //       data: {
-//   //         title: title || existingPost.title,
-//   //         slug,
-//   //         category: categoryId 
-//   //           ? { connect: { id: categoryId } } 
-//   //           : existingPost.categoryId 
-//   //             ? { disconnect: true } 
-//   //             : undefined,
-//   //         tags: tags 
-//   //           ? (Array.isArray(tags) ? tags : tags.split(',').map(t => t.trim())) 
-//   //           : existingPost.tags,
-//   //         content: content 
-//   //           ? (typeof content === 'string' ? JSON.parse(content) : content) 
-//   //           : existingPost.content,
-//   //         excerpt: excerpt || existingPost.excerpt,
-//   //         featured: featured !== undefined ? featured === 'true' : existingPost.featured,
-//   //         status: status || existingPost.status,
-//   //         seoTitle: seoTitle || existingPost.seoTitle,
-//   //         seoDesc: seoDesc || existingPost.seoDesc,
-//   //         seoKeywords: seoKeywords || existingPost.seoKeywords,
-//   //         images: finalImages,
-//   //         publishedAt: status === 'PUBLISHED' && existingPost.status !== 'PUBLISHED' 
-//   //           ? new Date() 
-//   //           : existingPost.publishedAt,
-//   //       },
-//   //       include: {
-//   //         author: {
-//   //           select: {
-//   //             id: true,
-//   //             name: true,
-//   //             avatar: true,
-//   //           },
-//   //         },
-//   //         category: {
-//   //           select: {
-//   //             id: true,
-//   //             name: true,
-//   //             slug: true,
-//   //           },
-//   //         },
-//   //       },
-//   //     });
+  //       res.json({ success: true, data: updated });
+  //     } catch (err) {
+  //       if (Object.values(uploaded).length) {
+  //         await Promise.all(Object.values(uploaded).map(deleteFromCloudinary));
+  //       }
+  //       next(err);
+  //     }
+  //   },
 
-//   //     // Delete old images from Cloudinary
-//   //     if (imagesToDelete.length > 0) {
-//   //       await Promise.all(
-//   //         imagesToDelete.map(url => deleteFromCloudinary(url))
-//   //       );
-//   //     }
+  //   /* ------------------------------ Delete ---------------------------------- */
+  //   async deleteBlogPost(
+  //     req: AuthenticatedRequest,
+  //     res: Response,
+  //     next: NextFunction
+  //   ) {
+  //     const { id } = req.params;
+  //     const user = req.user!;
 
-//   //     res.json({
-//   //       success: true,
-//   //       data: updatedPost,
-//   //     });
-//   //   } catch (error) {
-//   //     // Cleanup uploaded images if error occurs
-//   //     if (Object.keys(uploadedImages).length > 0) {
-//   //       await Promise.all(
-//   //         Object.values(uploadedImages).map(url => 
-//   //           deleteFromCloudinary(url))
-//   //       );
-//   //     }
-//   //     next(error);
-//   //   }
-//   // },
+  //     try {
+  //       const post = await prisma.blogPost.findUnique({ where: { id } });
+  //       if (!post) throw new ApiError(404, "Blog post not found");
+  //       if (post.authorId !== user?.userId && user.role !== UserRole.ADMIN)
+  //         throw new ApiError(403, "Forbidden");
 
-//   // Delete Blog Post
-//   // async deleteBlogPost(req: AuthenticatedRequest, res: Response, next: NextFunction) {
-//   //   const { id } = req.params;
-//   //   const { user } = req;
+  //       const imgs = post.images as BlogPostImages;
+  //       const urls = [
+  //         imgs?.featured,
+  //         imgs?.thumbnail,
+  //         ...(imgs?.gallery ?? []),
+  //       ].filter(Boolean) as string[];
 
-//   //   try {
-//   //     const post = await prisma.blogPost.findUnique({
-//   //       where: { id },
-//   //     });
+  //       await prisma.blogPost.delete({ where: { id } });
 
-//   //     if (!post) {
-//   //       throw new ApiError(404, 'Blog post not found');
-//   //     }
+  //       if (urls.length) await Promise.all(urls.map(deleteFromCloudinary));
 
-//   //     // Check authorization
-//   //     if (post.authorId !== user.id && !user.isAdmin) {
-//   //       throw new ApiError(403, 'Not authorized to delete this post');
-//   //     }
+  //       res.json({ success: true, message: "Deleted successfully" });
+  //     } catch (err) {
+  //       next(err);
+  //     }
+  //   },
 
-//   //     // Get images to delete
-//   //     const images = post.images as unknown as BlogPostImages || {};
-//   //     const imageUrls = [
-//   //       images.featured,
-//   //       images.thumbnail,
-//   //       ...(images.gallery || []),
-//   //     ].filter(Boolean) as string[];
+  //   /* ------------------------------- List ----------------------------------- */
+  async listBlogPosts(req: Request, res: Response, next: NextFunction) {
+    try {
+      const {
+        page = "1",
+        limit = "10",
+        status,
+        category,
+        featured,
+        search,
+      } = req.query;
 
-//   //     // Delete post
-//   //     await prisma.blogPost.delete({
-//   //       where: { id },
-//   //     });
+      const where: Prisma.BlogPostWhereInput = {};
 
-//   //     // Delete images from Cloudinary
-//   //     if (imageUrls.length > 0) {
-//   //       await Promise.all(
-//   //         imageUrls.map(url => deleteFromCloudinary(url))
-//   //       );
-//   //     }
+      if (status) where.status = status as PostStatus;
+      if (category) where.categoryId = Number(category);
+      if (featured) where.featured = featured === "true";
+      if (search) {
+        where.OR = [
+          { title: { contains: search as string, mode: "insensitive" } },
+          { excerpt: { contains: search as string, mode: "insensitive" } },
+        ];
+      }
 
-//   //     res.json({
-//   //       success: true,
-//   //       message: 'Blog post deleted successfully',
-//   //     });
-//   //   } catch (error) {
-//   //     next(error);
-//   //   }
-//   // },
+      const take = Number(limit);
+      const skip = (Number(page) - 1) * take;
 
-//   // List Blog Posts
-//   // async listBlogPosts(req: Request, res: Response, next: NextFunction) {
-//   //   try {
-//   //     const { 
-//   //       page = 1, 
-//   //       limit = 10, 
-//   //       status, 
-//   //       category, 
-//   //       featured, 
-//   //       search 
-//   //     } = req.query;
+      const [posts, total] = await Promise.all([
+        prisma.blogPost.findMany({
+          where,
+          skip,
+          take,
+          orderBy: { publishedAt: "desc" },
+          include: {
+            author: { select: { id: true, username: true, avatar: true } },
+            category: { select: { id: true, name: true } },
+          },
+        }),
+        prisma.blogPost.count({ where }),
+      ]);
 
-//   //     const skip = (Number(page) - 1) * Number(limit);
-//   //     const where: Prisma.BlogPostWhereInput = {};
-
-//   //     if (status) where.status = status as string;
-//   //     if (category) where.categoryId = category as string;
-//   //     if (featured) where.featured = featured === 'true';
-//   //     if (search) {
-//   //       where.OR = [
-//   //         { title: { contains: search as string, mode: 'insensitive' } },
-//   //         { excerpt: { contains: search as string, mode: 'insensitive' } },
-//   //         { content: { path: ['text'], string_contains: search as string } },
-//   //       ];
-//   //     }
-
-//   //     const [posts, total] = await Promise.all([
-//   //       prisma.blogPost.findMany({
-//   //         where,
-//   //         skip,
-//   //         take: Number(limit),
-//   //         orderBy: {
-//   //           publishedAt: 'desc',
-//   //         },
-//   //         include: {
-//   //           author: {
-//   //             select: {
-//   //               id: true,
-//   //               name: true,
-//   //               avatar: true,
-//   //             },
-//   //           },
-//   //           category: {
-//   //             select: {
-//   //               id: true,
-//   //               name: true,
-//   //               slug: true,
-//   //             },
-//   //           },
-//   //         },
-//   //       }),
-//   //       prisma.blogPost.count({ where }),
-//   //     ]);
-
-//   //     res.json({
-//   //       success: true,
-//   //       data: posts,
-//   //       meta: {
-//   //         total,
-//   //         page: Number(page),
-//   //         limit: Number(limit),
-//   //         pages: Math.ceil(total / Number(limit)),
-//   //       },
-//   //     });
-//   //   } catch (error) {
-//   //     next(error);
-//   //   }
-//   // },
-// };
+      res.json({
+        success: true,
+        data: posts,
+        meta: {
+          total,
+          page: Number(page),
+          limit: take,
+          pages: Math.ceil(total / take),
+        },
+      });
+    } catch (err) {
+      next(err);
+    }
+  },
+};

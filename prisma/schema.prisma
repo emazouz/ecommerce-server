@@ -869,22 +869,24 @@ model Compare {
 // --- Blog Model ---
 model BlogPost {
   id          String     @id @default(uuid())
-  title       String
-  slug        String     @unique
-  author      User       @relation(fields: [authorId], references: [id])
-  authorId    String
   category    Category?  @relation(fields: [categoryId], references: [id])
   categoryId  Int?
   tags        String[]
+  title       String
+  author      User       @relation(fields: [authorId], references: [id])
+  authorId    String
+  slug        String     @unique
   content     Json       @db.Json // المحتوى المنظم (للمحرر المرئي)
   excerpt     String? // ملخص المقال
+  views       Int        @default(0)
+  
   featured    Boolean    @default(false)
   status      PostStatus @default(DRAFT)
   seoTitle    String?
   seoDesc     String?
   seoKeywords String?
   images      Json?      @db.Json // {thumbnail, cover, gallery}
-  views       Int        @default(0)
+  
   publishedAt DateTime?
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt

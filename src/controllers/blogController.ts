@@ -1,21 +1,17 @@
-/* -------------------------------------------------------------------------- */
-/*  BlogPostController                                                        */
-/* -------------------------------------------------------------------------- */
-
-import { Prisma, PostStatus, UserRole } from "@prisma/client";
-import { Request, Response, NextFunction } from "express";
-import { prisma } from "../utils/prisma";
-import { uploadToCloudinary, deleteFromCloudinary } from "../utils/cloudinary";
-import { ApiError } from "../utils/ApiError";
-import { AuthenticatedRequest } from "../middleware/authMiddleware";
+/////////////////////////////////////////////////////////////////////
+import type { AuthenticatedRequest } from "../middleware/authMiddleware";
 import fs from "fs";
-
-/* -------------------------------------------------------------------------- */
-/*  Types                                                                     */
-/* -------------------------------------------------------------------------- */
-
+import type { NextFunction, Request, Response } from "express";
+import { ApiError } from "../utils/ApiError";
+import { deleteFromCloudinary, uploadToCloudinary } from "../utils/cloudinary";
+import { prisma } from "../utils/prisma";
+import { PostStatus, Prisma, UserRole } from "@prisma/client";
 interface FileRequest extends AuthenticatedRequest {
-  files?: Express.Multer.File[];
+  files?: {
+    featuredImage?: Express.Multer.File[];
+    thumbnail?: Express.Multer.File[];
+    gallery?: Express.Multer.File[];
+  };
 }
 
 interface BlogPostImages {
@@ -28,17 +24,6 @@ interface BlogPostImages {
 /* -------------------------------------------------------------------------- */
 /*  Helpers                                                                   */
 /* -------------------------------------------------------------------------- */
-
-const cleanupFiles = (files: Express.Multer.File[]) => {
-  files.forEach((f) => {
-    try {
-      fs.unlinkSync(f.path);
-    } catch {
-      /* silent */
-    }
-  });
-};
-
 const safeJSON = <T>(raw: unknown, fallback: T): T => {
   if (typeof raw !== "string") return fallback;
   try {
@@ -53,36 +38,53 @@ const generateSlug = async (title: string, postId?: string) => {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
-
   let slug = base;
   let n = 1;
 
-  // If we’re editing, allow collision with the same record
+  // If we're editing, allow collision with the same record
   const notId = postId ? { NOT: { id: postId } } : undefined;
-
   while (await prisma.blogPost.findFirst({ where: { slug, ...notId } })) {
     slug = `${base}-${n++}`;
   }
   return slug;
 };
 
-const parseTags = (tags: unknown): string[] =>
-  Array.isArray(tags)
-    ? (tags as string[])
-    : typeof tags === "string"
-    ? tags.split(",").map((t) => t.trim())
-    : [];
+// const parseTags = (tags: unknown): string[] =>
+//   Array.isArray(tags)
+//     ? (tags as string[])
+//     : typeof tags === "string"
+//     ? tags.split(",").map((t) => t.trim())
+//     : [];
+
+const parseTags = (tags: unknown): string[] => {
+  if (Array.isArray(tags)) {
+    return tags as string[];
+  }
+
+  if (typeof tags === "string") {
+    try {
+      const parsed = JSON.parse(tags);
+      if (Array.isArray(parsed)) return parsed;
+      // fallback: treat as comma-separated string
+      return tags.split(",").map((t) => t.trim());
+    } catch {
+      // fallback: treat as comma-separated string
+      return tags.split(",").map((t) => t.trim());
+    }
+  }
+
+  return [];
+};
 
 /* -------------------------------------------------------------------------- */
 /*  Controller                                                                */
 /* -------------------------------------------------------------------------- */
-
 export const BlogPostController = {
   /* ------------------------------ Create ---------------------------------- */
   async createBlogPost(req: FileRequest, res: Response, next: NextFunction) {
     const user = req.user!;
-    const files = req.files ?? [];
-    const uploaded: Record<string, string> = {};
+    const files = req.files || {};
+    const uploaded: Record<string, string | string[]> = {};
 
     try {
       const {
@@ -99,16 +101,37 @@ export const BlogPostController = {
         images: imagesJson,
       } = req.body;
 
-      if (!title || !content)
+      console.log("Creating blog post:", { title, categoryId, tags, status });
+
+      if (!title || !content) {
         throw new ApiError(400, "Title and content are required");
+      }
 
       /* ---------- Upload new files ---------- */
-      if (files.length) {
-        const results = await Promise.all(
-          files.map((f) => uploadToCloudinary(f, "blog"))
+      // Handle featured image
+      if (files.featuredImage && files.featuredImage[0]) {
+        const result = await uploadToCloudinary(
+          files.featuredImage[0],
+          "blog/featured"
         );
-        files.forEach((f, i) => (uploaded[f.fieldname] = results[i].url));
-        cleanupFiles(files);
+        uploaded.featured = result.url;
+      }
+
+      // Handle thumbnail
+      if (files.thumbnail && files.thumbnail[0]) {
+        const result = await uploadToCloudinary(
+          files.thumbnail[0],
+          "blog/thumbnails"
+        );
+        uploaded.thumbnail = result.url;
+      }
+
+      // Handle gallery images
+      if (files.gallery && files.gallery.length > 0) {
+        const galleryResults = await Promise.all(
+          files.gallery.map((file) => uploadToCloudinary(file, "blog/gallery"))
+        );
+        uploaded.gallery = galleryResults.map((result) => result.url);
       }
 
       /* ---------- Merge images ---------- */
@@ -130,7 +153,7 @@ export const BlogPostController = {
             excerpt ||
             (typeof content === "string" ? content.slice(0, 150) : ""),
           featured: featured === "true",
-          status: (status as PostStatus) || PostStatus.DRAFT,
+          status,
           seoTitle: seoTitle || title,
           seoDesc:
             seoDesc ||
@@ -141,7 +164,9 @@ export const BlogPostController = {
           publishedAt: status === PostStatus.PUBLISHED ? new Date() : undefined,
         },
         include: {
-          author: { select: { id: true, username: true, avatar: true } },
+          author: {
+            select: { id: true, username: true, avatar: true, email: true },
+          },
           category: { select: { id: true, name: true } },
         },
       });
@@ -149,167 +174,223 @@ export const BlogPostController = {
       return res.status(201).json({ success: true, data: post });
     } catch (err) {
       /* rollback uploads on error */
-      if (Object.values(uploaded).length) {
-        await Promise.all(Object.values(uploaded).map(deleteFromCloudinary));
+      const allUploaded = [
+        ...(typeof uploaded.featured === "string" ? [uploaded.featured] : []),
+        ...(typeof uploaded.thumbnail === "string" ? [uploaded.thumbnail] : []),
+        ...(Array.isArray(uploaded.gallery) ? uploaded.gallery : []),
+      ];
+
+      if (allUploaded.length) {
+        await Promise.all(allUploaded.map(deleteFromCloudinary));
       }
       return next(err);
     }
   },
 
-  //   /* -------------------------------- Read ---------------------------------- */
-  //   async getBlogPostBySlug(req: Request, res: Response, next: NextFunction) {
-  //     try {
-  //       const { slug } = req.params;
+  /* -------------------------------- Read ---------------------------------- */
+  async getBlogPostBySlug(req: Request, res: Response, next: NextFunction) {
+    try {
+      const { slug } = req.params;
+      const post = await prisma.blogPost.update({
+        where: { slug },
+        data: { views: { increment: 1 } },
+        include: {
+          author: {
+            select: { id: true, username: true, avatar: true, email: true },
+          },
+          category: { select: { id: true, name: true } },
+        },
+      });
+      if (!post) throw new ApiError(404, "Blog post not found");
+      res.json({ success: true, data: post });
+    } catch (err) {
+      next(err);
+    }
+  },
 
-  //       const post = await prisma.blogPost.update({
-  //         where: { slug },
-  //         data: { views: { increment: 1 } },
-  //         include: {
-  //           author: { select: { id: true, username: true, avatar: true } },
-  //           category: { select: { id: true, name: true } },
-  //         },
-  //       });
+  async getBlogPostById(req: Request, res: Response, next: NextFunction) {
+    try {
+      const { id } = req.params;
+      const post = await prisma.blogPost.findUnique({
+        where: { id },
+        include: {
+          author: {
+            select: { id: true, username: true, avatar: true, email: true },
+          },
+          category: { select: { id: true, name: true } },
+        },
+      });
+      if (!post) throw new ApiError(404, "Blog post not found");
+      res.json({ success: true, data: post });
+    } catch (err) {
+      next(err);
+    }
+  },
 
-  //       if (!post) throw new ApiError(404, "Blog post not found");
-  //       res.json({ success: true, data: post });
-  //     } catch (err) {
-  //       next(err);
-  //     }
-  //   },
+  /* ------------------------------ Update ---------------------------------- */
+  async updateBlogPost(req: FileRequest, res: Response, next: NextFunction) {
+    const { id } = req.params;
+    const user = req.user!;
+    const files = req.files || {};
+    const uploaded: Record<string, string | string[]> = {};
+    const removeQueue: string[] = [];
 
-  //   /* ------------------------------ Update ---------------------------------- */
-  //   async updateBlogPost(req: FileRequest, res: Response, next: NextFunction) {
-  //     const { id } = req.params;
-  //     const user = req.user!;
-  //     const files = req.files ?? [];
-  //     const uploaded: Record<string, string> = {};
-  //     const removeQueue: string[] = [];
+    try {
+      const current = await prisma.blogPost.findUnique({ where: { id } });
+      if (!current) throw new ApiError(404, "Blog post not found");
+      if (current.authorId !== user?.userId && user.role !== UserRole.ADMIN) {
+        throw new ApiError(403, "Forbidden");
+      }
 
-  //     try {
-  //       const current = await prisma.blogPost.findUnique({ where: { id } });
-  //       if (!current) throw new ApiError(404, "Blog post not found");
+      /* ---------- Upload new files ---------- */
+      // Handle featured image
+      if (files.featuredImage && files.featuredImage[0]) {
+        const result = await uploadToCloudinary(
+          files.featuredImage[0],
+          "blog/featured"
+        );
+        uploaded.featured = result.url;
+      }
 
-  //       if (current.authorId !== user?.userId && user.role !== UserRole.ADMIN)
-  //         throw new ApiError(403, "Forbidden");
+      // Handle thumbnail
+      if (files.thumbnail && files.thumbnail[0]) {
+        const result = await uploadToCloudinary(
+          files.thumbnail[0],
+          "blog/thumbnails"
+        );
+        uploaded.thumbnail = result.url;
+      }
 
-  //       /* ---------- Upload new files ---------- */
-  //       if (files.length) {
-  //         const results = await Promise.all(
-  //           files.map((f) => uploadToCloudinary(f, "blog"))
-  //         );
-  //         files.forEach((f, i) => (uploaded[f.fieldname] = results[i].url));
-  //         cleanupFiles(files);
-  //       }
+      // Handle gallery images
+      if (files.gallery && files.gallery.length > 0) {
+        const galleryResults = await Promise.all(
+          files.gallery.map((file) => uploadToCloudinary(file, "blog/gallery"))
+        );
+        uploaded.gallery = galleryResults.map((result) => result.url);
+      }
 
-  //       /* ---------- Handle deletions ---------- */
-  //       const pendingDeletion: string[] = safeJSON<string[]>(
-  //         req.body.deleteImages,
-  //         []
-  //       );
-  //       const existingImages = current.images as BlogPostImages;
-  //       pendingDeletion.forEach((field) => {
-  //         const url = existingImages?.[field as keyof BlogPostImages];
-  //         if (url) {
-  //           removeQueue.push(url as string);
-  //           delete existingImages[field as keyof BlogPostImages];
-  //         }
-  //       });
+      /* ---------- Handle deletions ---------- */
+      const pendingDeletion: string[] = safeJSON<string[]>(
+        req.body.deleteImages,
+        []
+      );
+      const existingImages = current.images as BlogPostImages;
+      pendingDeletion.forEach((field) => {
+        const url = existingImages?.[field as keyof BlogPostImages];
+        if (url) {
+          if (Array.isArray(url)) {
+            removeQueue.push(...url);
+          } else {
+            removeQueue.push(url as string);
+          }
+          delete existingImages[field as keyof BlogPostImages];
+        }
+      });
 
-  //       const finalImages: BlogPostImages = {
-  //         ...existingImages,
-  //         ...safeJSON<BlogPostImages | {}>(req.body.images, {}),
-  //         ...uploaded,
-  //       };
+      const finalImages: BlogPostImages = {
+        ...existingImages,
+        ...safeJSON<BlogPostImages | {}>(req.body.images, {}),
+        ...uploaded,
+      };
 
-  //       /* ---------- Persist ---------- */
-  //       const newSlug =
-  //         req.body.title && req.body.title !== current.title
-  //           ? await generateSlug(req.body.title, id)
-  //           : current.slug;
+      /* ---------- Persist ---------- */
+      const newSlug =
+        req.body.title && req.body.title !== current.title
+          ? await generateSlug(req.body.title, id)
+          : current.slug;
 
-  //       const updated = await prisma.blogPost.update({
-  //         where: { id },
-  //         data: {
-  //           title: req.body.title ?? current.title,
-  //           slug: newSlug,
-  //           categoryId: req.body.categoryId
-  //             ? Number(req.body.categoryId)
-  //             : current.categoryId,
-  //           tags: req.body.tags ? parseTags(req.body.tags) : current.tags,
-  //           content: req.body.content
-  //             ? typeof req.body.content === "string"
-  //               ? JSON.parse(req.body.content)
-  //               : req.body.content
-  //             : current.content,
-  //           excerpt: req.body.excerpt ?? current.excerpt,
-  //           featured:
-  //             req.body.featured !== undefined
-  //               ? req.body.featured === "true"
-  //               : current.featured,
-  //           status: (req.body.status as PostStatus) ?? current.status,
-  //           seoTitle: req.body.seoTitle ?? current.seoTitle,
-  //           seoDesc: req.body.seoDesc ?? current.seoDesc,
-  //           seoKeywords: req.body.seoKeywords ?? current.seoKeywords,
-  //           images: finalImages,
-  //           publishedAt:
-  //             req.body.status === PostStatus.PUBLISHED &&
-  //             current.status !== PostStatus.PUBLISHED
-  //               ? new Date()
-  //               : current.publishedAt,
-  //         },
-  //         include: {
-  //           author: { select: { id: true, username: true, avatar: true } },
-  //           category: { select: { id: true, name: true } },
-  //         },
-  //       });
+      const updated = await prisma.blogPost.update({
+        where: { id },
+        data: {
+          title: req.body.title ?? current.title,
+          slug: newSlug,
+          categoryId: req.body.categoryId
+            ? Number(req.body.categoryId)
+            : current.categoryId,
+          tags: req.body.tags ? parseTags(req.body.tags) : current.tags,
+          content: req.body.content
+            ? typeof req.body.content === "string"
+              ? JSON.parse(req.body.content)
+              : req.body.content
+            : current.content,
+          excerpt: req.body.excerpt ?? current.excerpt,
+          featured:
+            req.body.featured !== undefined
+              ? req.body.featured === "true"
+              : current.featured,
+          status: (req.body.status as PostStatus) ?? current.status,
+          seoTitle: req.body.seoTitle ?? current.seoTitle,
+          seoDesc: req.body.seoDesc ?? current.seoDesc,
+          seoKeywords: req.body.seoKeywords ?? current.seoKeywords,
+          images: finalImages,
+          publishedAt:
+            req.body.status === PostStatus.PUBLISHED &&
+            current.status !== PostStatus.PUBLISHED
+              ? new Date()
+              : current.publishedAt,
+        },
+        include: {
+          author: {
+            select: { id: true, username: true, avatar: true, email: true },
+          },
+          category: { select: { id: true, name: true } },
+        },
+      });
 
-  //       /* ---------- Cloudinary cleanup ---------- */
-  //       if (removeQueue.length) {
-  //         await Promise.all(removeQueue.map(deleteFromCloudinary));
-  //       }
+      /* ---------- Cloudinary cleanup ---------- */
+      if (removeQueue.length) {
+        await Promise.all(removeQueue.map(deleteFromCloudinary));
+      }
 
-  //       res.json({ success: true, data: updated });
-  //     } catch (err) {
-  //       if (Object.values(uploaded).length) {
-  //         await Promise.all(Object.values(uploaded).map(deleteFromCloudinary));
-  //       }
-  //       next(err);
-  //     }
-  //   },
+      res.json({ success: true, data: updated });
+    } catch (err) {
+      const allUploaded = [
+        ...(typeof uploaded.featured === "string" ? [uploaded.featured] : []),
+        ...(typeof uploaded.thumbnail === "string" ? [uploaded.thumbnail] : []),
+        ...(Array.isArray(uploaded.gallery) ? uploaded.gallery : []),
+      ];
 
-  //   /* ------------------------------ Delete ---------------------------------- */
-  //   async deleteBlogPost(
-  //     req: AuthenticatedRequest,
-  //     res: Response,
-  //     next: NextFunction
-  //   ) {
-  //     const { id } = req.params;
-  //     const user = req.user!;
+      if (allUploaded.length) {
+        await Promise.all(allUploaded.map(deleteFromCloudinary));
+      }
+      next(err);
+    }
+  },
 
-  //     try {
-  //       const post = await prisma.blogPost.findUnique({ where: { id } });
-  //       if (!post) throw new ApiError(404, "Blog post not found");
-  //       if (post.authorId !== user?.userId && user.role !== UserRole.ADMIN)
-  //         throw new ApiError(403, "Forbidden");
+  /* ------------------------------ Delete ---------------------------------- */
+  async deleteBlogPost(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction
+  ) {
+    const { id } = req.params;
+    const user = req.user!;
+    try {
+      const post = await prisma.blogPost.findUnique({ where: { id } });
+      if (!post) throw new ApiError(404, "Blog post not found");
+      if (post.authorId !== user?.userId && user.role !== UserRole.ADMIN) {
+        throw new ApiError(403, "Forbidden");
+      }
 
-  //       const imgs = post.images as BlogPostImages;
-  //       const urls = [
-  //         imgs?.featured,
-  //         imgs?.thumbnail,
-  //         ...(imgs?.gallery ?? []),
-  //       ].filter(Boolean) as string[];
+      const imgs = post.images as BlogPostImages;
+      const urls = [
+        imgs?.featured,
+        imgs?.thumbnail,
+        ...(imgs?.gallery ?? []),
+      ].filter(Boolean) as string[];
 
-  //       await prisma.blogPost.delete({ where: { id } });
+      await prisma.blogPost.delete({ where: { id } });
+      if (urls.length) {
+        await Promise.all(urls.map(deleteFromCloudinary));
+      }
 
-  //       if (urls.length) await Promise.all(urls.map(deleteFromCloudinary));
+      res.json({ success: true, message: "Deleted successfully" });
+    } catch (err) {
+      next(err);
+    }
+  },
 
-  //       res.json({ success: true, message: "Deleted successfully" });
-  //     } catch (err) {
-  //       next(err);
-  //     }
-  //   },
-
-  //   /* ------------------------------- List ----------------------------------- */
+  /* ------------------------------- List ----------------------------------- */
   async listBlogPosts(req: Request, res: Response, next: NextFunction) {
     try {
       const {
@@ -321,33 +402,44 @@ export const BlogPostController = {
         search,
       } = req.query;
 
-      const where: Prisma.BlogPostWhereInput = {};
+      const take = Number(limit);
+      const skip = (Number(page) - 1) * take;
+      const filters: Prisma.BlogPostWhereInput = {};
 
-      if (status) where.status = status as PostStatus;
-      if (category) where.categoryId = Number(category);
-      if (featured) where.featured = featured === "true";
+      if (status) filters.status = status as PostStatus;
+      if (category) filters.categoryId = Number(category);
+      if (featured !== undefined) filters.featured = featured === "true";
       if (search) {
-        where.OR = [
+        filters.OR = [
           { title: { contains: search as string, mode: "insensitive" } },
           { excerpt: { contains: search as string, mode: "insensitive" } },
         ];
       }
 
-      const take = Number(limit);
-      const skip = (Number(page) - 1) * take;
-
       const [posts, total] = await Promise.all([
         prisma.blogPost.findMany({
-          where,
+          where: filters,
           skip,
           take,
           orderBy: { publishedAt: "desc" },
           include: {
-            author: { select: { id: true, username: true, avatar: true } },
-            category: { select: { id: true, name: true } },
+            author: {
+              select: {
+                id: true,
+                username: true,
+                avatar: true,
+                email: true,
+              },
+            },
+            category: {
+              select: {
+                id: true,
+                name: true,
+              },
+            },
           },
         }),
-        prisma.blogPost.count({ where }),
+        prisma.blogPost.count({ where: filters }),
       ]);
 
       res.json({
@@ -360,6 +452,22 @@ export const BlogPostController = {
           pages: Math.ceil(total / take),
         },
       });
+    } catch (err) {
+      next(err);
+    }
+  },
+
+  /* ------------------------------- View Increment ------------------------- */
+  async incrementViews(req: Request, res: Response, next: NextFunction) {
+    try {
+      const { id } = req.params;
+
+      await prisma.blogPost.update({
+        where: { id },
+        data: { views: { increment: 1 } },
+      });
+
+      res.json({ success: true, message: "View count incremented" });
     } catch (err) {
       next(err);
     }
